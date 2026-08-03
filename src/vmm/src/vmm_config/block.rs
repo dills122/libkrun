@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::fs::File;
 use std::sync::{Arc, Mutex};
 
 use devices::virtio::{
@@ -35,6 +36,14 @@ pub struct BlockDeviceConfig {
     pub sync_mode: SyncMode,
 }
 
+#[derive(Clone, Debug)]
+pub struct ReadOnlyRawRootFdConfig {
+    pub file: Arc<File>,
+    pub expected_device: u64,
+    pub expected_inode: u64,
+    pub expected_length: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlockRootConfig {
     pub device: String,
@@ -56,6 +65,21 @@ impl BlockBuilder {
 
     pub fn insert(&mut self, config: BlockDeviceConfig) -> Result<()> {
         let block_dev = Arc::new(Mutex::new(Self::create_block(config)?));
+        self.list.push_back(block_dev);
+        Ok(())
+    }
+
+    pub fn insert_read_only_raw_root(&mut self, config: ReadOnlyRawRootFdConfig) -> Result<()> {
+        let block_dev = Arc::new(Mutex::new(
+            devices::virtio::Block::new_read_only_raw_file(
+                "vda".to_string(),
+                config.file,
+                config.expected_device,
+                config.expected_inode,
+                config.expected_length,
+            )
+            .map_err(BlockConfigError::CreateBlockDevice)?,
+        ));
         self.list.push_back(block_dev);
         Ok(())
     }

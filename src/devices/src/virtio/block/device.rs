@@ -9,6 +9,8 @@ use std::cmp;
 use std::convert::From;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
@@ -281,6 +283,111 @@ impl Block {
             }
         };
 
+        Self::from_storage(
+            id,
+            partuuid,
+            cache_type,
+            disk_image,
+            disk_image_id,
+            is_disk_read_only,
+            sync_mode,
+            discard_alignment,
+        )
+    }
+
+    /// Create a read-only raw block device from an already-owned descriptor.
+    ///
+    /// This path deliberately has no filename and cannot select a non-raw format.
+    /// Both the identity descriptor and the descriptor transferred to imago are
+    /// revalidated before device construction.
+    #[cfg(unix)]
+    pub fn new_read_only_raw_file(
+        id: String,
+        file: Arc<File>,
+        expected_device: u64,
+        expected_inode: u64,
+        expected_length: u64,
+    ) -> io::Result<Block> {
+        Self::validate_read_only_raw_file(&file, expected_device, expected_inode, expected_length)?;
+        let disk_image_id = DiskProperties::build_disk_image_id(&file);
+
+        let io_file = file.try_clone()?;
+        Self::validate_read_only_raw_file(
+            &io_file,
+            expected_device,
+            expected_inode,
+            expected_length,
+        )?;
+        let file = ImagoFile::try_from(io_file)?;
+        let discard_alignment = file.discard_align();
+        let raw = Raw::<Box<dyn DynStorage>>::open_image_sync(Box::new(file), false)?;
+        let disk_image = SyncFormatAccess::new(raw)?;
+
+        Self::from_storage(
+            id,
+            None,
+            CacheType::Unsafe,
+            disk_image,
+            disk_image_id,
+            true,
+            SyncMode::None,
+            discard_alignment,
+        )
+    }
+
+    #[cfg(unix)]
+    fn validate_read_only_raw_file(
+        file: &File,
+        expected_device: u64,
+        expected_inode: u64,
+        expected_length: u64,
+    ) -> io::Result<()> {
+        if expected_length == 0 || !expected_length.is_multiple_of(SECTOR_SIZE) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "raw descriptor length must be a non-zero sector multiple",
+            ));
+        }
+
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if flags & libc::O_ACCMODE != libc::O_RDONLY {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "raw descriptor is not read-only",
+            ));
+        }
+
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.st_nlink() != 0
+            || metadata.st_mode() & 0o7777 != 0o400
+            || metadata.st_dev() != expected_device
+            || metadata.st_ino() != expected_inode
+            || metadata.st_size() != expected_length
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "raw descriptor identity or finalized-file invariant mismatch",
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_storage(
+        id: String,
+        partuuid: Option<String>,
+        cache_type: CacheType,
+        disk_image: SyncFormatAccess<Box<dyn DynStorage>>,
+        disk_image_id: Vec<u8>,
+        is_disk_read_only: bool,
+        sync_mode: SyncMode,
+        discard_alignment: usize,
+    ) -> io::Result<Block> {
         let disk_image = Arc::new(Mutex::new(disk_image));
 
         let disk_properties =
@@ -440,5 +547,104 @@ impl VirtioDevice for Block {
         }
         self.device_state = DeviceState::Inactive;
         true
+    }
+}
+
+#[cfg(all(test, unix))]
+mod read_only_raw_fd_tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture(keep_writable: bool) -> (Arc<File>, u64, u64, u64) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "libkrun-read-only-raw-fd-{}-{nonce}",
+            std::process::id()
+        ));
+        let mut writer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        writer.write_all(&vec![0x5a; 4096]).unwrap();
+        writer.sync_all().unwrap();
+        assert_eq!(unsafe { libc::fchmod(writer.as_raw_fd(), 0o400) }, 0);
+
+        let file = if keep_writable {
+            writer
+        } else {
+            let reader = OpenOptions::new().read(true).open(&path).unwrap();
+            drop(writer);
+            reader
+        };
+        fs::remove_file(&path).unwrap();
+        let metadata = file.metadata().unwrap();
+        assert_eq!(metadata.st_nlink(), 0);
+        (
+            Arc::new(file),
+            metadata.st_dev(),
+            metadata.st_ino(),
+            metadata.st_size(),
+        )
+    }
+
+    #[test]
+    fn descriptor_native_raw_io_is_positional_and_write_closed() {
+        let (file, device, inode, length) = fixture(false);
+        assert_eq!(
+            unsafe { libc::lseek(file.as_raw_fd(), 37, libc::SEEK_SET) },
+            37
+        );
+        let block = Block::new_read_only_raw_file(
+            "vda".to_string(),
+            Arc::clone(&file),
+            device,
+            inode,
+            length,
+        )
+        .unwrap();
+
+        let mut bytes = [0; 4];
+        block
+            .disk_image
+            .lock()
+            .unwrap()
+            .read(&mut bytes[..], 128)
+            .unwrap();
+        assert_eq!(bytes, [0x5a; 4]);
+        assert!(block
+            .disk_image
+            .lock()
+            .unwrap()
+            .write(&[0x41][..], 0)
+            .is_err());
+        assert_eq!(
+            unsafe { libc::lseek(file.as_raw_fd(), 0, libc::SEEK_CUR) },
+            37
+        );
+    }
+
+    #[test]
+    fn descriptor_native_raw_rejects_writable_and_wrong_identity() {
+        let (writable, device, inode, length) = fixture(true);
+        assert!(
+            Block::new_read_only_raw_file("vda".to_string(), writable, device, inode, length,)
+                .is_err()
+        );
+
+        let (read_only, device, inode, length) = fixture(false);
+        assert!(Block::new_read_only_raw_file(
+            "vda".to_string(),
+            read_only,
+            device,
+            inode.wrapping_add(1),
+            length,
+        )
+        .is_err());
     }
 }
