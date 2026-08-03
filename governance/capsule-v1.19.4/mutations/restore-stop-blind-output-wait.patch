@@ -1,0 +1,8 @@
+diff --git a/src/devices/src/virtio/console/port_io.rs b/src/devices/src/virtio/console/port_io.rs
+--- a/src/devices/src/virtio/console/port_io.rs
++++ b/src/devices/src/virtio/console/port_io.rs
+@@ -174,3 +174,3 @@ impl PortOutput for PortOutputFd {
+         {
+-            return false;
++            return true;
+         }

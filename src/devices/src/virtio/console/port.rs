@@ -157,8 +157,9 @@ impl Port {
         });
 
         let tx_thread = output.map(|output| {
+            let stopfd = stopfd.try_clone().unwrap();
             let stop = stop.clone();
-            thread::spawn(move || process_tx(mem, tx_queue, interrupt, output, stop))
+            thread::spawn(move || process_tx(mem, tx_queue, interrupt, output, stopfd, stop))
         });
 
         self.state = PortState::Active {
@@ -167,6 +168,10 @@ impl Port {
             rx_thread,
             tx_thread,
         }
+    }
+
+    pub fn is_active(&self) -> bool {
+        matches!(self.state, PortState::Active { .. })
     }
 
     pub fn shutdown(&mut self) {
@@ -178,6 +183,12 @@ impl Port {
         } = &mut self.state
         {
             stop.store(true, Ordering::Release);
+            if let Err(e) = stopfd.write(1) {
+                log::error!(
+                    "Failed to signal shutdown for port {port_id}: {e}",
+                    port_id = self.port_id
+                );
+            }
             if let Some(tx_thread) = mem::take(tx_thread) {
                 tx_thread.thread().unpark();
                 if let Err(e) = tx_thread.join() {
@@ -187,7 +198,6 @@ impl Port {
                     )
                 }
             }
-            stopfd.write(1).unwrap();
             if let Some(rx_thread) = mem::take(rx_thread) {
                 rx_thread.thread().unpark();
                 if let Err(e) = rx_thread.join() {

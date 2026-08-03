@@ -1364,8 +1364,18 @@ int main(int argc, char **argv)
     }
 
 #if __linux__
+    if (getenv("KRUN_DIRECT_BLOCK_ROOT")) {
+        if (mount(NULL, "/", NULL,
+                  MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL) < 0) {
+            perror("remount direct block root");
+            exit(-1);
+        }
+    }
+
     krun_root = clone_str(getenv("KRUN_BLOCK_ROOT_DEVICE"));
     if (krun_root) {
+        unsigned long krun_root_mount_flags = 0;
+        const void *krun_root_mount_data;
         if (mkdir("/newroot", 0755) < 0 && errno != EEXIST) {
             perror("mkdir(/newroot)");
             exit(-1);
@@ -1374,8 +1384,23 @@ int main(int argc, char **argv)
         krun_root_fstype = clone_str(getenv("KRUN_BLOCK_ROOT_FSTYPE"));
         krun_root_options = clone_str(getenv("KRUN_BLOCK_ROOT_OPTIONS"));
 
-        if (try_mount(krun_root, "/newroot", krun_root_fstype, 0,
-                      krun_root_options) < 0) {
+        /*
+         * mount(2) requires generic VFS flags separately from filesystem
+         * data. libkrun's block-root API currently forwards every option as
+         * filesystem data, which makes a read-only virtio block device fail
+         * to mount. Keep this product profile deliberately narrow: recognize
+         * only the exact immutable-root option set and leave every other
+         * option unchanged for upstream-compatible behavior.
+         */
+        krun_root_mount_data = krun_root_options;
+        if (krun_root_options &&
+            strcmp(krun_root_options, "ro,nosuid,nodev") == 0) {
+            krun_root_mount_flags = MS_RDONLY | MS_NOSUID | MS_NODEV;
+            krun_root_mount_data = NULL;
+        }
+
+        if (try_mount(krun_root, "/newroot", krun_root_fstype,
+                      krun_root_mount_flags, krun_root_mount_data) < 0) {
             perror("mount KRUN_BLOCK_ROOT_DEVICE");
             exit(-1);
         }

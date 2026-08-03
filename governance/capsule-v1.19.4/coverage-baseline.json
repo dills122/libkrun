@@ -1,0 +1,15 @@
+{
+  "status": "retained local library measurement; not guest, VMM, or admission evidence",
+  "sourceEvidenceDate": "2026-08-03",
+  "aggregateChangedConsoleFiles": {
+    "functions": { "count": 88, "covered": 13, "percent": 14.772727 },
+    "lines": { "count": 728, "covered": 90, "percent": 12.362637 },
+    "regions": { "count": 1091, "covered": 156, "percent": 14.298808 }
+  },
+  "files": [
+    { "file": "src/devices/src/virtio/console/device.rs", "functions": { "count": 30, "covered": 7 }, "lines": { "count": 275, "covered": 35 }, "regions": { "count": 421, "covered": 58 } },
+    { "file": "src/devices/src/virtio/console/port.rs", "functions": { "count": 17, "covered": 0 }, "lines": { "count": 137, "covered": 0 }, "regions": { "count": 172, "covered": 0 }, "blocker": true },
+    { "file": "src/devices/src/virtio/console/port_io.rs", "functions": { "count": 37, "covered": 6 }, "lines": { "count": 225, "covered": 55 }, "regions": { "count": 378, "covered": 98 } },
+    { "file": "src/devices/src/virtio/console/process_tx.rs", "functions": { "count": 4, "covered": 0 }, "lines": { "count": 91, "covered": 0 }, "regions": { "count": 120, "covered": 0 }, "blocker": true }
+  ]
+}

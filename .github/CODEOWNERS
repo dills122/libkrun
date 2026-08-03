@@ -1,0 +1,12 @@
+# The governed Capsule patch line requires review by the fork owner.
+* @dills122
+
+/governance/capsule-v1.19.4/ @dills122
+/.github/workflows/capsule-governed.yml @dills122
+/include/libkrun.h @dills122
+/src/devices/src/virtio/block/device.rs @dills122
+/src/devices/src/virtio/console/ @dills122
+/src/init_blob/init/init.c @dills122
+/src/libkrun/src/lib.rs @dills122
+/src/vmm/src/resources.rs @dills122
+/src/vmm/src/vmm_config/block.rs @dills122

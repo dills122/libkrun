@@ -1,0 +1,298 @@
+diff --git a/src/devices/src/virtio/console/device.rs b/src/devices/src/virtio/console/device.rs
+index b1022a3..7c9325a 100644
+--- a/src/devices/src/virtio/console/device.rs
++++ b/src/devices/src/virtio/console/device.rs
+@@ -27,0 +28,16 @@ pub(crate) const CONTROL_TXQ_INDEX: usize = 3;
++fn control_descriptor_shape_valid(len: u32, write_only: bool, chained: bool) -> bool {
++    !write_only && !chained && len as usize == size_of::<VirtioConsoleControl>()
++}
++
++fn checked_port_index(port_count: usize, port_id: u32) -> Option<usize> {
++    usize::try_from(port_id)
++        .ok()
++        .filter(|port_id| *port_id < port_count)
++}
++
++fn schedule_port_start(pending: &mut Vec<usize>, port_id: usize, active: bool) {
++    if !active && !pending.contains(&port_id) {
++        pending.push(port_id);
++    }
++}
++
+@@ -176,0 +193,13 @@ impl Console {
++            if !control_descriptor_shape_valid(head.len, head.is_write_only(), head.has_next()) {
++                log::warn!(
++                    "Ignoring malformed console control descriptor: len={}, write_only={}, chained={}",
++                    head.len,
++                    head.is_write_only(),
++                    head.has_next(),
++                );
++                if let Err(e) = control_tx.queue.add_used(mem, head.index, 0) {
++                    error!("failed to add rejected control element to the queue: {e:?}");
++                }
++                continue;
++            }
++
+@@ -184 +213,6 @@ impl Console {
+-                );
++                    );
++                    if let Err(add_error) = control_tx.queue.add_used(mem, head.index, 0) {
++                        error!(
++                            "failed to add unreadable control element to the queue: {add_error:?}"
++                        );
++                    }
+@@ -212 +246,6 @@ impl Console {
+-                    if let Some(term) = self.ports[cmd.id as usize].terminal() {
++                    let Some(port_id) = checked_port_index(self.ports.len(), cmd.id) else {
++                        log::warn!("Ignoring ready event for unknown console port {}", cmd.id);
++                        continue;
++                    };
++
++                    if let Some(term) = self.ports[port_id].terminal() {
+@@ -224 +263 @@ impl Console {
+-                    let name = self.ports[cmd.id as usize].name();
++                    let name = self.ports[port_id].name();
+@@ -230,0 +270,5 @@ impl Console {
++                    let Some(port_id) = checked_port_index(self.ports.len(), cmd.id) else {
++                        log::warn!("Ignoring open event for unknown console port {}", cmd.id);
++                        continue;
++                    };
++
+@@ -249 +293,5 @@ impl Console {
+-                    ports_to_start.push(cmd.id as usize);
++                    schedule_port_start(
++                        &mut ports_to_start,
++                        port_id,
++                        self.ports[port_id].is_active(),
++                    );
+@@ -255,0 +304,3 @@ impl Console {
++            if self.ports[port_id].is_active() {
++                continue;
++            }
+@@ -261,8 +312,9 @@ impl Console {
+-            let rx_queue = self.queues[rx_idx]
+-                .take()
+-                .expect("port rx queue should exist")
+-                .queue;
+-            let tx_queue = self.queues[tx_idx]
+-                .take()
+-                .expect("port tx queue should exist")
+-                .queue;
++            let Some(rx_queue) = self.queues.get_mut(rx_idx).and_then(Option::take) else {
++                log::warn!("Ignoring console start without rx queue for port {port_id}");
++                continue;
++            };
++            let Some(tx_queue) = self.queues.get_mut(tx_idx).and_then(Option::take) else {
++                log::warn!("Ignoring console start without tx queue for port {port_id}");
++                self.queues[rx_idx] = Some(rx_queue);
++                continue;
++            };
+@@ -272,2 +324,2 @@ impl Console {
+-                rx_queue,
+-                tx_queue,
++                rx_queue.queue,
++                tx_queue.queue,
+@@ -369,0 +422,36 @@ impl VmmExitObserver for Console {
++
++#[cfg(test)]
++mod tests {
++    use super::{
++        checked_port_index, control_descriptor_shape_valid, schedule_port_start,
++        VirtioConsoleControl,
++    };
++    use std::mem::size_of;
++
++    #[test]
++    fn control_descriptor_requires_one_exact_readable_object() {
++        let exact = size_of::<VirtioConsoleControl>() as u32;
++        assert!(control_descriptor_shape_valid(exact, false, false));
++        assert!(!control_descriptor_shape_valid(exact - 1, false, false));
++        assert!(!control_descriptor_shape_valid(exact + 1, false, false));
++        assert!(!control_descriptor_shape_valid(exact, true, false));
++        assert!(!control_descriptor_shape_valid(exact, false, true));
++    }
++
++    #[test]
++    fn port_index_rejects_unknown_identifiers() {
++        assert_eq!(checked_port_index(2, 0), Some(0));
++        assert_eq!(checked_port_index(2, 1), Some(1));
++        assert_eq!(checked_port_index(2, 2), None);
++        assert_eq!(checked_port_index(2, u32::MAX), None);
++    }
++
++    #[test]
++    fn repeated_or_active_port_start_is_not_scheduled_twice() {
++        let mut pending = Vec::new();
++        schedule_port_start(&mut pending, 1, false);
++        schedule_port_start(&mut pending, 1, false);
++        schedule_port_start(&mut pending, 2, true);
++        assert_eq!(pending, vec![1]);
++    }
++}
+diff --git a/src/devices/src/virtio/console/port.rs b/src/devices/src/virtio/console/port.rs
+index caae5bc..9108a1a 100644
+--- a/src/devices/src/virtio/console/port.rs
++++ b/src/devices/src/virtio/console/port.rs
+@@ -159,0 +160 @@ impl Port {
++            let stopfd = stopfd.try_clone().unwrap();
+@@ -161 +162 @@ impl Port {
+-            thread::spawn(move || process_tx(mem, tx_queue, interrupt, output, stop))
++            thread::spawn(move || process_tx(mem, tx_queue, interrupt, output, stopfd, stop))
+@@ -171,0 +173,4 @@ impl Port {
++    pub fn is_active(&self) -> bool {
++        matches!(self.state, PortState::Active { .. })
++    }
++
+@@ -180,0 +186,6 @@ impl Port {
++            if let Err(e) = stopfd.write(1) {
++                log::error!(
++                    "Failed to signal shutdown for port {port_id}: {e}",
++                    port_id = self.port_id
++                );
++            }
+@@ -190 +200,0 @@ impl Port {
+-            stopfd.write(1).unwrap();
+diff --git a/src/devices/src/virtio/console/port_io.rs b/src/devices/src/virtio/console/port_io.rs
+index be515ab..b70b89c 100644
+--- a/src/devices/src/virtio/console/port_io.rs
++++ b/src/devices/src/virtio/console/port_io.rs
+@@ -26 +26,2 @@ pub trait PortOutput {
+-    fn wait_until_writable(&self);
++    /// Wait until output can make progress. Returns false when shutdown wins.
++    fn wait_until_writable(&self, stopfd: Option<&EventFd>) -> bool;
+@@ -156,3 +157,26 @@ impl PortOutput for PortOutputFd {
+-    fn wait_until_writable(&self) {
+-        let mut poll_fds = [PollFd::new(self.0.as_fd(), PollFlags::POLLOUT)];
+-        poll(&mut poll_fds, PollTimeout::NONE).expect("Failed to poll");
++    fn wait_until_writable(&self, stopfd: Option<&EventFd>) -> bool {
++        let mut poll_fds = vec![PollFd::new(self.0.as_fd(), PollFlags::POLLOUT)];
++        if let Some(stopfd) = stopfd {
++            // SAFETY: the caller keeps stopfd alive for the duration of this poll.
++            let borrowed_fd = unsafe { BorrowedFd::borrow_raw(stopfd.as_raw_fd()) };
++            poll_fds.push(PollFd::new(borrowed_fd, PollFlags::POLLIN));
++        }
++
++        if let Err(e) = poll(&mut poll_fds, PollTimeout::NONE) {
++            log::error!("Failed to poll console output: {e}");
++            return false;
++        }
++
++        if poll_fds
++            .get(1)
++            .and_then(PollFd::revents)
++            .is_some_and(|events| events.intersects(PollFlags::POLLIN))
++        {
++            return false;
++        }
++
++        poll_fds[0].revents().is_some_and(|events| {
++            events.intersects(
++                PollFlags::POLLOUT | PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL,
++            )
++        })
+@@ -224 +248,3 @@ impl PortOutput for PortOutputLog {
+-    fn wait_until_writable(&self) {}
++    fn wait_until_writable(&self, _stopfd: Option<&EventFd>) -> bool {
++        true
++    }
+@@ -334,0 +361,39 @@ ioctl_read_bad!(tiocgwinsz, TIOCGWINSZ, WS);
++
++#[cfg(test)]
++mod output_wait_tests {
++    use super::{output_to_raw_fd_dup, PortOutput};
++    use nix::errno::Errno;
++    use nix::unistd::pipe;
++    use std::os::fd::AsRawFd;
++    use utils::eventfd::{EventFd, EFD_NONBLOCK};
++
++    #[test]
++    fn shutdown_interrupts_a_blocked_output_wait() {
++        let (reader, writer) = pipe().expect("create pipe");
++        let output: Box<dyn PortOutput + Send> =
++            output_to_raw_fd_dup(writer.as_raw_fd()).expect("duplicate output");
++
++        let fill = [0u8; 4096];
++        loop {
++            // SAFETY: writer and fill remain valid for the duration of this call.
++            let written = unsafe {
++                libc::write(
++                    writer.as_raw_fd(),
++                    fill.as_ptr().cast::<libc::c_void>(),
++                    fill.len(),
++                )
++            };
++            if written < 0 {
++                assert_eq!(Errno::last(), Errno::EAGAIN);
++                break;
++            }
++        }
++
++        let stopfd = EventFd::new(EFD_NONBLOCK).expect("create stop event");
++        stopfd.write(1).expect("signal stop");
++        assert!(!output.wait_until_writable(Some(&stopfd)));
++
++        drop(reader);
++        drop(writer);
++    }
++}
+diff --git a/src/devices/src/virtio/console/process_tx.rs b/src/devices/src/virtio/console/process_tx.rs
+index d1c7f69..35e13df 100644
+--- a/src/devices/src/virtio/console/process_tx.rs
++++ b/src/devices/src/virtio/console/process_tx.rs
+@@ -4,0 +5 @@ use std::{io, thread};
++use utils::eventfd::EventFd;
+@@ -14,0 +16 @@ pub(crate) fn process_tx(
++    stopfd: EventFd,
+@@ -25 +27 @@ pub(crate) fn process_tx(
+-        for desc in head.into_iter().readable() {
++        'descriptors: for desc in head.into_iter().readable() {
+@@ -27 +29,7 @@ pub(crate) fn process_tx(
+-            match write_desc_to_output(desc, output.lock().unwrap().as_mut(), &interrupt) {
++            match write_desc_to_output(
++                desc,
++                output.lock().unwrap().as_mut(),
++                &interrupt,
++                &stopfd,
++                &stop,
++            ) {
+@@ -32 +39,0 @@ pub(crate) fn process_tx(
+-                    assert_eq!(n, desc_len);
+@@ -33,0 +41,3 @@ pub(crate) fn process_tx(
++                    if n < desc_len {
++                        break 'descriptors;
++                    }
+@@ -84,0 +95,2 @@ fn write_desc_to_output(
++    stopfd: &EventFd,
++    stop: &AtomicBool,
+@@ -89 +101,3 @@ fn write_desc_to_output(
+-    desc.mem
++    let mut deferred_error = None;
++    let result = desc
++        .mem
+@@ -92,0 +107,3 @@ fn write_desc_to_output(
++                if stop.load(Ordering::Acquire) {
++                    return Ok(0);
++                }
+@@ -101 +118,7 @@ fn write_desc_to_output(
+-                        output.wait_until_writable();
++                        if !output.wait_until_writable(Some(stopfd)) {
++                            return Ok(0);
++                        }
++                    }
++                    Err(e) => {
++                        deferred_error = Some(GuestMemoryError::IOError(e));
++                        break Ok(0);
+@@ -103 +125,0 @@ fn write_desc_to_output(
+-                    Err(e) => break Err(GuestMemoryError::IOError(e)),
+@@ -106 +128,10 @@ fn write_desc_to_output(
+-        })
++        });
++
++    match (result, deferred_error) {
++        (Ok(0), Some(error)) => Err(error),
++        (Ok(bytes_written), Some(error)) => {
++            log::error!("Console output stopped after {bytes_written} bytes: {error}");
++            Ok(bytes_written)
++        }
++        (result, _) => result,
++    }

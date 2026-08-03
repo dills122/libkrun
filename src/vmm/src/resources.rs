@@ -14,7 +14,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "blk")]
-use crate::vmm_config::block::{BlockBuilder, BlockConfigError, BlockDeviceConfig};
+use crate::vmm_config::block::{
+    BlockBuilder, BlockConfigError, BlockDeviceConfig, ReadOnlyRawRootFdConfig,
+};
 use crate::vmm_config::external_kernel::ExternalKernel;
 use crate::vmm_config::firmware::FirmwareConfig;
 #[cfg(not(feature = "tee"))]
@@ -327,6 +329,14 @@ impl VmResources {
     #[cfg(feature = "blk")]
     pub fn add_block_device(&mut self, config: BlockDeviceConfig) -> Result<BlockConfigError> {
         self.block.insert(config)
+    }
+
+    #[cfg(feature = "blk")]
+    pub fn add_read_only_raw_root_fd(
+        &mut self,
+        config: ReadOnlyRawRootFdConfig,
+    ) -> Result<BlockConfigError> {
+        self.block.insert_read_only_raw_root(config)
     }
 
     /// Sets a vsock device to be attached when the VM starts.

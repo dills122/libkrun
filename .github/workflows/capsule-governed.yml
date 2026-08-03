@@ -1,0 +1,78 @@
+name: Capsule governed libkrun v1.19.4
+
+on:
+  pull_request:
+    branches:
+      - capsule/upstream-v1.19.4
+    paths:
+      - .github/CODEOWNERS
+      - .github/workflows/capsule-governed.yml
+      - governance/capsule-v1.19.4/**
+      - include/libkrun.h
+      - src/devices/src/virtio/block/device.rs
+      - src/devices/src/virtio/console/**
+      - src/init_blob/init/init.c
+      - src/libkrun/src/lib.rs
+      - src/vmm/src/resources.rs
+      - src/vmm/src/vmm_config/block.rs
+  push:
+    branches:
+      - codex/governed-capsule-v1.19.4
+    paths:
+      - .github/CODEOWNERS
+      - .github/workflows/capsule-governed.yml
+      - governance/capsule-v1.19.4/**
+      - include/libkrun.h
+      - src/devices/src/virtio/block/device.rs
+      - src/devices/src/virtio/console/**
+      - src/init_blob/init/init.c
+      - src/libkrun/src/lib.rs
+      - src/vmm/src/resources.rs
+      - src/vmm/src/vmm_config/block.rs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capsule-governed-v1.19.4-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governed-library:
+    name: No-guest governed library gates
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CAPSULE_ALLOW_GUEST: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out governed change
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned validation tools
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+          rustup override set 1.93.1
+          rustup toolchain install nightly-2026-05-28 --profile minimal
+          cargo install cargo-llvm-cov --version 0.8.4 --locked
+          cargo fetch --locked
+
+      - name: Verify governed patch queue and local library
+        env:
+          CAPSULE_COVERAGE_OUTPUT: ${{ runner.temp }}/capsule-console-coverage.json
+        run: governance/capsule-v1.19.4/scripts/verify-governed.sh
+
+      - name: Print measured per-file coverage
+        if: always()
+        run: |
+          if test -f "${{ runner.temp }}/capsule-console-coverage.json"; then
+            cat "${{ runner.temp }}/capsule-console-coverage.json"
+          else
+            echo "Coverage result unavailable; governed library gate did not complete."
+            exit 1
+          fi

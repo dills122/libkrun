@@ -173,6 +173,33 @@ int32_t krun_set_data_disk(uint32_t ctx_id, const char *disk_path);
  */
 int32_t krun_add_disk(uint32_t ctx_id, const char *block_id, const char *disk_path, bool read_only);
 
+/**
+ * Adds one finalized, unlinked, read-only raw regular file descriptor as the
+ * runtime-root block device `vda`.
+ *
+ * This API never accepts or reconstructs a pathname and never probes an image
+ * format. It immediately duplicates `fd`; the caller retains ownership and may
+ * close its descriptor after this function succeeds. The owned duplicate must
+ * be O_RDONLY, mode 0400, unlinked, a regular file, a non-zero multiple of 512
+ * bytes, and match all expected identity fields. Any existing `vda` or legacy
+ * root-disk configuration is rejected.
+ *
+ * Arguments:
+ *  "ctx_id"          - the configuration context ID.
+ *  "fd"              - caller-owned descriptor for the finalized runtime root.
+ *  "expected_device" - st_dev observed by the caller after finalization.
+ *  "expected_inode"  - st_ino observed by the caller after finalization.
+ *  "expected_length" - exact finalized byte length.
+ *
+ * Returns:
+ *  Zero on success or a negative error number on failure.
+ */
+int32_t krun_add_read_only_raw_root_fd(uint32_t ctx_id,
+                                       int fd,
+                                       uint64_t expected_device,
+                                       uint64_t expected_inode,
+                                       uint64_t expected_length);
+
 /* Supported disk image formats */
 #define KRUN_DISK_FORMAT_RAW 0
 #define KRUN_DISK_FORMAT_QCOW2 1

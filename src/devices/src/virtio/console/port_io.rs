@@ -23,7 +23,8 @@ pub trait PortInput {
 pub trait PortOutput {
     fn write_volatile(&mut self, buf: &VolatileSlice) -> Result<usize, io::Error>;
 
-    fn wait_until_writable(&self);
+    /// Wait until output can make progress. Returns false when shutdown wins.
+    fn wait_until_writable(&self, stopfd: Option<&EventFd>) -> bool;
 }
 
 /// Terminal properties associated with this port
@@ -153,9 +154,32 @@ impl PortOutput for PortOutputFd {
         })
     }
 
-    fn wait_until_writable(&self) {
-        let mut poll_fds = [PollFd::new(self.0.as_fd(), PollFlags::POLLOUT)];
-        poll(&mut poll_fds, PollTimeout::NONE).expect("Failed to poll");
+    fn wait_until_writable(&self, stopfd: Option<&EventFd>) -> bool {
+        let mut poll_fds = vec![PollFd::new(self.0.as_fd(), PollFlags::POLLOUT)];
+        if let Some(stopfd) = stopfd {
+            // SAFETY: the caller keeps stopfd alive for the duration of this poll.
+            let borrowed_fd = unsafe { BorrowedFd::borrow_raw(stopfd.as_raw_fd()) };
+            poll_fds.push(PollFd::new(borrowed_fd, PollFlags::POLLIN));
+        }
+
+        if let Err(e) = poll(&mut poll_fds, PollTimeout::NONE) {
+            log::error!("Failed to poll console output: {e}");
+            return false;
+        }
+
+        if poll_fds
+            .get(1)
+            .and_then(PollFd::revents)
+            .is_some_and(|events| events.intersects(PollFlags::POLLIN))
+        {
+            return false;
+        }
+
+        poll_fds[0].revents().is_some_and(|events| {
+            events.intersects(
+                PollFlags::POLLOUT | PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL,
+            )
+        })
     }
 }
 
@@ -221,7 +245,9 @@ impl PortOutput for PortOutputLog {
         Ok(buf.len())
     }
 
-    fn wait_until_writable(&self) {}
+    fn wait_until_writable(&self, _stopfd: Option<&EventFd>) -> bool {
+        true
+    }
 }
 
 pub struct PortInputSigInt {
@@ -332,3 +358,42 @@ struct WS {
     ypixel: u16,
 }
 ioctl_read_bad!(tiocgwinsz, TIOCGWINSZ, WS);
+
+#[cfg(test)]
+mod output_wait_tests {
+    use super::{output_to_raw_fd_dup, PortOutput};
+    use nix::errno::Errno;
+    use nix::unistd::pipe;
+    use std::os::fd::AsRawFd;
+    use utils::eventfd::{EventFd, EFD_NONBLOCK};
+
+    #[test]
+    fn shutdown_interrupts_a_blocked_output_wait() {
+        let (reader, writer) = pipe().expect("create pipe");
+        let output: Box<dyn PortOutput + Send> =
+            output_to_raw_fd_dup(writer.as_raw_fd()).expect("duplicate output");
+
+        let fill = [0u8; 4096];
+        loop {
+            // SAFETY: writer and fill remain valid for the duration of this call.
+            let written = unsafe {
+                libc::write(
+                    writer.as_raw_fd(),
+                    fill.as_ptr().cast::<libc::c_void>(),
+                    fill.len(),
+                )
+            };
+            if written < 0 {
+                assert_eq!(Errno::last(), Errno::EAGAIN);
+                break;
+            }
+        }
+
+        let stopfd = EventFd::new(EFD_NONBLOCK).expect("create stop event");
+        stopfd.write(1).expect("signal stop");
+        assert!(!output.wait_until_writable(Some(&stopfd)));
+
+        drop(reader);
+        drop(writer);
+    }
+}

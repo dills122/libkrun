@@ -1,0 +1,129 @@
+diff --git a/src/init_blob/init/init.c b/src/init_blob/init/init.c
+index 83ea6b4..a4aa793 100644
+--- a/src/init_blob/init/init.c
++++ b/src/init_blob/init/init.c
+@@ -1364,6 +1364,14 @@ int main(int argc, char **argv)
+     }
+
+ #if __linux__
++    if (getenv("KRUN_DIRECT_BLOCK_ROOT")) {
++        if (mount(NULL, "/", NULL,
++                  MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL) < 0) {
++            perror("remount direct block root");
++            exit(-1);
++        }
++    }
++
+     krun_root = clone_str(getenv("KRUN_BLOCK_ROOT_DEVICE"));
+     if (krun_root) {
+         unsigned long krun_root_mount_flags = 0;
+diff --git a/src/libkrun/src/lib.rs b/src/libkrun/src/lib.rs
+index be3300f..3326187 100644
+--- a/src/libkrun/src/lib.rs
++++ b/src/libkrun/src/lib.rs
+@@ -89,6 +89,8 @@ static KRUNFW: LazyLock<Option<libloading::Library>> =
+
+ // Path to the init binary to be executed inside the VM.
+ const INIT_PATH: &str = "/init.krun";
++#[cfg(feature = "blk")]
++const BLOCK_ROOT_INIT_PATH: &str = "/usr/local/libexec/capsule-init.krun";
+
+ #[cfg(all(
+     feature = "init-blob",
+@@ -228,22 +230,19 @@ impl ContextConfig {
+     }
+
+     fn get_block_root(&self) -> String {
++        "".to_string()
++    }
++
++    fn get_kernel_prolog(&self) -> String {
+         #[cfg(feature = "blk")]
+-        match &self.block_root {
+-            Some(block_root) => {
+-                let mut res = format!("KRUN_BLOCK_ROOT_DEVICE={}", block_root.device);
+-                if let Some(fstype) = &block_root.fstype {
+-                    res += &format!(" KRUN_BLOCK_ROOT_FSTYPE={fstype}");
+-                }
+-                if let Some(options) = &block_root.options {
+-                    res += &format!(" KRUN_BLOCK_ROOT_OPTIONS={options}");
+-                }
+-                res
+-            }
+-            None => "".to_string(),
++        if self.block_root.is_some() {
++            return format!(
++                "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 quiet no-kvmapf \
++                 root=/dev/vda rootfstype=ext4 ro rootwait \
++                 init={BLOCK_ROOT_INIT_PATH} KRUN_DIRECT_BLOCK_ROOT=1"
++            );
+         }
+-        #[cfg(not(feature = "blk"))]
+-        "".to_string()
++        format!("{DEFAULT_KERNEL_CMDLINE} init={INIT_PATH}")
+     }
+
+     fn set_env(&mut self, env: String) {
+@@ -2368,6 +2367,13 @@ pub unsafe extern "C" fn krun_set_root_disk_remount(
+         None
+     };
+
++    if device != "/dev/vda" || fstype.as_deref() != Some("ext4")
++        || options.as_deref() != Some("ro,nosuid,nodev")
++    {
++        error!("Unsupported direct block-root profile");
++        return -libc::EOPNOTSUPP;
++    }
++
+     match CTX_MAP.lock().unwrap().entry(ctx_id) {
+         Entry::Occupied(mut ctx_cfg) => {
+             let ctx_cfg = ctx_cfg.get_mut();
+@@ -2382,39 +2388,6 @@ pub unsafe extern "C" fn krun_set_root_disk_remount(
+                 return -libc::EINVAL;
+             }
+
+-            // Boot from a block device: the virtiofs root only needs to
+-            // serve init.krun and provide mount points for /dev, /proc, /sys.
+-            // Use a NullFs (no host directory) with the inode overlay.
+-            let mut virtual_entries = Vec::new();
+-            #[cfg(feature = "init-blob")]
+-            if !ctx_cfg.disable_implicit_init {
+-                virtual_entries.push(init_virtual_entry());
+-            }
+-            // init.c needs these directories as mount points before
+-            // pivoting to the block device root.
+-            for name in ["dev", "proc", "sys", "newroot"] {
+-                virtual_entries.push(VirtualDirEntry {
+-                    name: CString::new(name).unwrap(),
+-                    entry: VirtualEntry {
+-                        mode: 0o755,
+-                        one_shot: false,
+-                        content: VirtualEntryContent::Dir {
+-                            children: Vec::new(),
+-                        },
+-                    },
+-                });
+-            }
+-
+-            ctx_cfg.vmr.add_fs_device(FsDeviceConfig {
+-                fs_id: "/dev/root".into(),
+-                shared_dir: None,
+-                semantics: PermissionSemantics::LinuxComplete,
+-                // Default to a conservative 512 MB window.
+-                shm_size: Some(1 << 29),
+-                read_only: false,
+-                virtual_entries,
+-            });
+-
+             ctx_cfg.set_block_root(device, fstype, options);
+         }
+         Entry::Vacant(_) => return -libc::ENOENT,
+@@ -2903,7 +2876,7 @@ pub extern "C" fn krun_start_enter(ctx_id: u32) -> i32 {
+     }
+
+     let kernel_cmdline = KernelCmdlineConfig {
+-        prolog: Some(format!("{DEFAULT_KERNEL_CMDLINE} init={INIT_PATH}")),
++        prolog: Some(ctx_cfg.get_kernel_prolog()),
+         krun_env: Some(format!(
+             " {} {} {} {} {}",
+             ctx_cfg.get_exec_path(),

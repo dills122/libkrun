@@ -29,9 +29,13 @@ use std::ffi::CString;
 use std::ffi::{c_void, CStr};
 use std::fs::File;
 use std::io::IsTerminal;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::fd::AsRawFd;
 use std::os::fd::{BorrowedFd, FromRawFd, RawFd};
+#[cfg(all(feature = "blk", target_os = "linux"))]
+use std::os::linux::fs::MetadataExt;
+#[cfg(all(feature = "blk", target_os = "macos"))]
+use std::os::macos::fs::MetadataExt;
 use std::path::PathBuf;
 use std::slice;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -43,7 +47,7 @@ use vmm::resources::{
     VmResources, VsockConfig,
 };
 #[cfg(feature = "blk")]
-use vmm::vmm_config::block::{BlockDeviceConfig, BlockRootConfig};
+use vmm::vmm_config::block::{BlockDeviceConfig, BlockRootConfig, ReadOnlyRawRootFdConfig};
 #[cfg(not(feature = "tee"))]
 use vmm::vmm_config::external_kernel::{ExternalKernel, KernelFormat};
 #[cfg(not(feature = "tee"))]
@@ -80,13 +84,15 @@ const KRUNFW_NAME: &str = "libkrunfw-sev.so.5";
 #[cfg(all(target_os = "linux", feature = "tdx"))]
 const KRUNFW_NAME: &str = "libkrunfw-tdx.so.5";
 #[cfg(target_os = "macos")]
-const KRUNFW_NAME: &str = "libkrunfw.5.dylib";
+const KRUNFW_NAME: &str = "@rpath/libkrunfw.5.dylib";
 
 #[cfg(feature = "aws-nitro")]
 static KRUN_NITRO_DEBUG: Mutex<bool> = Mutex::new(false);
 
 // Path to the init binary to be executed inside the VM.
 const INIT_PATH: &str = "/init.krun";
+#[cfg(feature = "blk")]
+const BLOCK_ROOT_INIT_PATH: &str = "/usr/local/libexec/capsule-init.krun";
 
 #[cfg(all(
     feature = "init-blob",
@@ -177,6 +183,8 @@ struct ContextConfig {
     #[cfg(feature = "blk")]
     data_block_cfg: Option<BlockDeviceConfig>,
     #[cfg(feature = "blk")]
+    read_only_raw_root_fd: Option<ReadOnlyRawRootFdConfig>,
+    #[cfg(feature = "blk")]
     block_root: Option<BlockRootConfig>,
     #[cfg(feature = "tee")]
     tee_config_file: Option<PathBuf>,
@@ -228,22 +236,19 @@ impl ContextConfig {
     }
 
     fn get_block_root(&self) -> String {
-        #[cfg(feature = "blk")]
-        match &self.block_root {
-            Some(block_root) => {
-                let mut res = format!("KRUN_BLOCK_ROOT_DEVICE={}", block_root.device);
-                if let Some(fstype) = &block_root.fstype {
-                    res += &format!(" KRUN_BLOCK_ROOT_FSTYPE={fstype}");
-                }
-                if let Some(options) = &block_root.options {
-                    res += &format!(" KRUN_BLOCK_ROOT_OPTIONS={options}");
-                }
-                res
-            }
-            None => "".to_string(),
-        }
-        #[cfg(not(feature = "blk"))]
         "".to_string()
+    }
+
+    fn get_kernel_prolog(&self) -> String {
+        #[cfg(feature = "blk")]
+        if self.block_root.is_some() {
+            return format!(
+                "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 quiet no-kvmapf \
+                 root=/dev/vda rootfstype=ext4 ro rootwait \
+                 init={BLOCK_ROOT_INIT_PATH} KRUN_DIRECT_BLOCK_ROOT=1"
+            );
+        }
+        format!("{DEFAULT_KERNEL_CMDLINE} init={INIT_PATH}")
     }
 
     fn set_env(&mut self, env: String) {
@@ -309,6 +314,11 @@ impl ContextConfig {
         } else {
             self.block_cfgs.clone()
         }
+    }
+
+    #[cfg(feature = "blk")]
+    fn conflicts_with_read_only_raw_root(&self, block_id: &str) -> bool {
+        block_id == "vda" && self.read_only_raw_root_fd.is_some()
     }
 
     #[cfg(feature = "net")]
@@ -778,6 +788,9 @@ pub unsafe extern "C" fn krun_add_disk(
     match CTX_MAP.lock().unwrap().entry(ctx_id) {
         Entry::Occupied(mut ctx_cfg) => {
             let cfg = ctx_cfg.get_mut();
+            if cfg.conflicts_with_read_only_raw_root(block_id) {
+                return -libc::EEXIST;
+            }
             let block_device_config = BlockDeviceConfig {
                 block_id: block_id.to_string(),
                 cache_type: CacheType::auto(disk_path),
@@ -791,6 +804,84 @@ pub unsafe extern "C" fn krun_add_disk(
                 sync_mode: SyncMode::Relaxed,
             };
             cfg.add_block_cfg(block_device_config);
+        }
+        Entry::Vacant(_) => return -libc::ENOENT,
+    }
+
+    KRUN_SUCCESS
+}
+
+/// Add Capsule's finalized runtime root as one read-only raw `vda` device.
+///
+/// The caller retains ownership of `fd`. libkrun immediately duplicates it,
+/// validates the owned duplicate, stores no pathname, and rejects every
+/// writable, linked, non-regular, incorrectly sized, or wrong-identity input.
+#[no_mangle]
+#[cfg(all(feature = "blk", unix))]
+pub extern "C" fn krun_add_read_only_raw_root_fd(
+    ctx_id: u32,
+    fd: c_int,
+    expected_device: u64,
+    expected_inode: u64,
+    expected_length: u64,
+) -> i32 {
+    if fd < 0
+        || expected_device == 0
+        || expected_inode == 0
+        || expected_length == 0
+        || !expected_length.is_multiple_of(512)
+    {
+        return -libc::EINVAL;
+    }
+
+    let owned_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if owned_fd < 0 {
+        return -std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or(libc::EIO);
+    }
+    let file = unsafe { File::from_raw_fd(owned_fd) };
+
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return -std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or(libc::EIO);
+    }
+    if flags & libc::O_ACCMODE != libc::O_RDONLY {
+        return -libc::EACCES;
+    }
+
+    let metadata = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => return -error.raw_os_error().unwrap_or(libc::EIO),
+    };
+    if !metadata.is_file()
+        || metadata.st_nlink() != 0
+        || metadata.st_mode() & 0o7777 != 0o400
+        || metadata.st_size() != expected_length
+    {
+        return -libc::EINVAL;
+    }
+    if metadata.st_dev() != expected_device || metadata.st_ino() != expected_inode {
+        return -libc::ESTALE;
+    }
+
+    match CTX_MAP.lock().unwrap().entry(ctx_id) {
+        Entry::Occupied(mut ctx_cfg) => {
+            let cfg = ctx_cfg.get_mut();
+            if cfg.read_only_raw_root_fd.is_some()
+                || cfg.root_block_cfg.is_some()
+                || cfg.block_cfgs.iter().any(|config| config.block_id == "vda")
+            {
+                return -libc::EEXIST;
+            }
+            cfg.read_only_raw_root_fd = Some(ReadOnlyRawRootFdConfig {
+                file: std::sync::Arc::new(file),
+                expected_device,
+                expected_inode,
+                expected_length,
+            });
         }
         Entry::Vacant(_) => return -libc::ENOENT,
     }
@@ -826,6 +917,9 @@ pub unsafe extern "C" fn krun_add_disk2(
     match CTX_MAP.lock().unwrap().entry(ctx_id) {
         Entry::Occupied(mut ctx_cfg) => {
             let cfg = ctx_cfg.get_mut();
+            if cfg.conflicts_with_read_only_raw_root(block_id) {
+                return -libc::EEXIST;
+            }
             let block_device_config = BlockDeviceConfig {
                 block_id: block_id.to_string(),
                 cache_type: CacheType::auto(disk_path),
@@ -881,6 +975,9 @@ pub unsafe extern "C" fn krun_add_disk3(
     match CTX_MAP.lock().unwrap().entry(ctx_id) {
         Entry::Occupied(mut ctx_cfg) => {
             let cfg = ctx_cfg.get_mut();
+            if cfg.conflicts_with_read_only_raw_root(block_id) {
+                return -libc::EEXIST;
+            }
             let block_device_config = BlockDeviceConfig {
                 block_id: block_id.to_string(),
                 cache_type: CacheType::auto(disk_path),
@@ -910,6 +1007,9 @@ pub unsafe extern "C" fn krun_set_root_disk(ctx_id: u32, c_disk_path: *const c_c
     match CTX_MAP.lock().unwrap().entry(ctx_id) {
         Entry::Occupied(mut ctx_cfg) => {
             let cfg = ctx_cfg.get_mut();
+            if cfg.read_only_raw_root_fd.is_some() {
+                return -libc::EEXIST;
+            }
             let block_device_config = BlockDeviceConfig {
                 block_id: "root".to_string(),
                 cache_type: CacheType::auto(disk_path),
@@ -2368,6 +2468,13 @@ pub unsafe extern "C" fn krun_set_root_disk_remount(
         None
     };
 
+    if device != "/dev/vda" || fstype.as_deref() != Some("ext4")
+        || options.as_deref() != Some("ro,nosuid,nodev")
+    {
+        error!("Unsupported direct block-root profile");
+        return -libc::EOPNOTSUPP;
+    }
+
     match CTX_MAP.lock().unwrap().entry(ctx_id) {
         Entry::Occupied(mut ctx_cfg) => {
             let ctx_cfg = ctx_cfg.get_mut();
@@ -2377,43 +2484,10 @@ pub unsafe extern "C" fn krun_set_root_disk_remount(
                 return -libc::EINVAL;
             }
 
-            if ctx_cfg.block_cfgs.is_empty() {
+            if ctx_cfg.block_cfgs.is_empty() && ctx_cfg.read_only_raw_root_fd.is_none() {
                 error!("No block devices configured");
                 return -libc::EINVAL;
             }
-
-            // Boot from a block device: the virtiofs root only needs to
-            // serve init.krun and provide mount points for /dev, /proc, /sys.
-            // Use a NullFs (no host directory) with the inode overlay.
-            let mut virtual_entries = Vec::new();
-            #[cfg(feature = "init-blob")]
-            if !ctx_cfg.disable_implicit_init {
-                virtual_entries.push(init_virtual_entry());
-            }
-            // init.c needs these directories as mount points before
-            // pivoting to the block device root.
-            for name in ["dev", "proc", "sys", "newroot"] {
-                virtual_entries.push(VirtualDirEntry {
-                    name: CString::new(name).unwrap(),
-                    entry: VirtualEntry {
-                        mode: 0o755,
-                        one_shot: false,
-                        content: VirtualEntryContent::Dir {
-                            children: Vec::new(),
-                        },
-                    },
-                });
-            }
-
-            ctx_cfg.vmr.add_fs_device(FsDeviceConfig {
-                fs_id: "/dev/root".into(),
-                shared_dir: None,
-                semantics: PermissionSemantics::LinuxComplete,
-                // Default to a conservative 512 MB window.
-                shm_size: Some(1 << 29),
-                read_only: false,
-                virtual_entries,
-            });
 
             ctx_cfg.set_block_root(device, fstype, options);
         }
@@ -2878,6 +2952,14 @@ pub extern "C" fn krun_start_enter(ctx_id: u32) -> i32 {
     }
 
     #[cfg(feature = "blk")]
+    if let Some(raw_root) = ctx_cfg.read_only_raw_root_fd.clone() {
+        if ctx_cfg.vmr.add_read_only_raw_root_fd(raw_root).is_err() {
+            error!("Error configuring read-only raw root descriptor");
+            return -libc::EINVAL;
+        }
+    }
+
+    #[cfg(feature = "blk")]
     for block_cfg in ctx_cfg.get_block_cfg() {
         if ctx_cfg.vmr.add_block_device(block_cfg).is_err() {
             error!("Error configuring virtio-blk for block");
@@ -2903,7 +2985,7 @@ pub extern "C" fn krun_start_enter(ctx_id: u32) -> i32 {
     }
 
     let kernel_cmdline = KernelCmdlineConfig {
-        prolog: Some(format!("{DEFAULT_KERNEL_CMDLINE} init={INIT_PATH}")),
+        prolog: Some(ctx_cfg.get_kernel_prolog()),
         krun_env: Some(format!(
             " {} {} {} {} {}",
             ctx_cfg.get_exec_path(),

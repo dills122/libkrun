@@ -1,0 +1,10 @@
+Diff in src/libkrun/src/lib.rs:2468:
+         None
+     };
+
+-    if device != "/dev/vda" || fstype.as_deref() != Some("ext4")
++    if device != "/dev/vda"
++        || fstype.as_deref() != Some("ext4")
+         || options.as_deref() != Some("ro,nosuid,nodev")
+     {
+         error!("Unsupported direct block-root profile");

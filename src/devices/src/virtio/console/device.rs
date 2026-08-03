@@ -25,6 +25,22 @@ use crate::virtio::{InterruptTransport, PortDescription, VmmExitObserver};
 pub(crate) const CONTROL_RXQ_INDEX: usize = 2;
 pub(crate) const CONTROL_TXQ_INDEX: usize = 3;
 
+fn control_descriptor_shape_valid(len: u32, write_only: bool, chained: bool) -> bool {
+    !write_only && !chained && len as usize == size_of::<VirtioConsoleControl>()
+}
+
+fn checked_port_index(port_count: usize, port_id: u32) -> Option<usize> {
+    usize::try_from(port_id)
+        .ok()
+        .filter(|port_id| *port_id < port_count)
+}
+
+fn schedule_port_start(pending: &mut Vec<usize>, port_id: usize, active: bool) {
+    if !active && !pending.contains(&port_id) {
+        pending.push(port_id);
+    }
+}
+
 pub(crate) const AVAIL_FEATURES: u64 = (1 << uapi::VIRTIO_CONSOLE_F_SIZE as u64)
     | (1 << uapi::VIRTIO_CONSOLE_F_MULTIPORT as u64)
     | (1 << uapi::VIRTIO_F_VERSION_1 as u64);
@@ -174,6 +190,19 @@ impl Console {
         while let Some(head) = control_tx.queue.pop(mem) {
             raise_irq = true;
 
+            if !control_descriptor_shape_valid(head.len, head.is_write_only(), head.has_next()) {
+                log::warn!(
+                    "Ignoring malformed console control descriptor: len={}, write_only={}, chained={}",
+                    head.len,
+                    head.is_write_only(),
+                    head.has_next(),
+                );
+                if let Err(e) = control_tx.queue.add_used(mem, head.index, 0) {
+                    error!("failed to add rejected control element to the queue: {e:?}");
+                }
+                continue;
+            }
+
             let cmd: VirtioConsoleControl = match mem.read_obj(head.addr) {
                 Ok(cmd) => cmd,
                 Err(e) => {
@@ -181,7 +210,12 @@ impl Console {
                     "Failed to read VirtioConsoleControl struct: {e:?}, struct len = {len}, head.len = {head_len}",
                     len = size_of::<VirtioConsoleControl>(),
                     head_len = head.len,
-                );
+                    );
+                    if let Err(add_error) = control_tx.queue.add_used(mem, head.index, 0) {
+                        error!(
+                            "failed to add unreadable control element to the queue: {add_error:?}"
+                        );
+                    }
                     continue;
                 }
             };
@@ -209,7 +243,12 @@ impl Console {
                         continue;
                     }
 
-                    if let Some(term) = self.ports[cmd.id as usize].terminal() {
+                    let Some(port_id) = checked_port_index(self.ports.len(), cmd.id) else {
+                        log::warn!("Ignoring ready event for unknown console port {}", cmd.id);
+                        continue;
+                    };
+
+                    if let Some(term) = self.ports[port_id].terminal() {
                         self.control.mark_console_port(mem, cmd.id);
                         self.control.port_open(cmd.id, true);
                         let (cols, rows) = term.get_win_size();
@@ -221,13 +260,18 @@ impl Console {
                         self.control.port_open(cmd.id, true)
                     }
 
-                    let name = self.ports[cmd.id as usize].name();
+                    let name = self.ports[port_id].name();
                     log::trace!("Port ready {id}: {name}", id = cmd.id);
                     if !name.is_empty() {
                         self.control.port_name(cmd.id, name)
                     }
                 }
                 control_event::VIRTIO_CONSOLE_PORT_OPEN => {
+                    let Some(port_id) = checked_port_index(self.ports.len(), cmd.id) else {
+                        log::warn!("Ignoring open event for unknown console port {}", cmd.id);
+                        continue;
+                    };
+
                     let opened = match cmd.value {
                         0 => false,
                         1 => true,
@@ -246,31 +290,39 @@ impl Console {
                         continue;
                     }
 
-                    ports_to_start.push(cmd.id as usize);
+                    schedule_port_start(
+                        &mut ports_to_start,
+                        port_id,
+                        self.ports[port_id].is_active(),
+                    );
                 }
                 _ => log::warn!("Unknown console control event {:x}", cmd.event),
             }
         }
 
         for port_id in ports_to_start {
+            if self.ports[port_id].is_active() {
+                continue;
+            }
             log::trace!("Starting port io for port {port_id}");
             let rx_idx = port_id_to_queue_idx(QueueDirection::Rx, port_id);
             let tx_idx = port_id_to_queue_idx(QueueDirection::Tx, port_id);
 
             // Take ownership of port queues - they are moved to the port.
-            let rx_queue = self.queues[rx_idx]
-                .take()
-                .expect("port rx queue should exist")
-                .queue;
-            let tx_queue = self.queues[tx_idx]
-                .take()
-                .expect("port tx queue should exist")
-                .queue;
+            let Some(rx_queue) = self.queues.get_mut(rx_idx).and_then(Option::take) else {
+                log::warn!("Ignoring console start without rx queue for port {port_id}");
+                continue;
+            };
+            let Some(tx_queue) = self.queues.get_mut(tx_idx).and_then(Option::take) else {
+                log::warn!("Ignoring console start without tx queue for port {port_id}");
+                self.queues[rx_idx] = Some(rx_queue);
+                continue;
+            };
 
             self.ports[port_id].start(
                 mem.clone(),
-                rx_queue,
-                tx_queue,
+                rx_queue.queue,
+                tx_queue.queue,
                 interrupt.clone(),
                 self.control.clone(),
             );
@@ -365,5 +417,41 @@ impl VmmExitObserver for Console {
     fn on_vmm_exit(&mut self) {
         self.reset();
         log::trace!("Console on_vmm_exit finished");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        checked_port_index, control_descriptor_shape_valid, schedule_port_start,
+        VirtioConsoleControl,
+    };
+    use std::mem::size_of;
+
+    #[test]
+    fn control_descriptor_requires_one_exact_readable_object() {
+        let exact = size_of::<VirtioConsoleControl>() as u32;
+        assert!(control_descriptor_shape_valid(exact, false, false));
+        assert!(!control_descriptor_shape_valid(exact - 1, false, false));
+        assert!(!control_descriptor_shape_valid(exact + 1, false, false));
+        assert!(!control_descriptor_shape_valid(exact, true, false));
+        assert!(!control_descriptor_shape_valid(exact, false, true));
+    }
+
+    #[test]
+    fn port_index_rejects_unknown_identifiers() {
+        assert_eq!(checked_port_index(2, 0), Some(0));
+        assert_eq!(checked_port_index(2, 1), Some(1));
+        assert_eq!(checked_port_index(2, 2), None);
+        assert_eq!(checked_port_index(2, u32::MAX), None);
+    }
+
+    #[test]
+    fn repeated_or_active_port_start_is_not_scheduled_twice() {
+        let mut pending = Vec::new();
+        schedule_port_start(&mut pending, 1, false);
+        schedule_port_start(&mut pending, 1, false);
+        schedule_port_start(&mut pending, 2, true);
+        assert_eq!(pending, vec![1]);
     }
 }

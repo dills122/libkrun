@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "profile": "capsule-governed-libkrun-v1.19.4",
+  "status": "review-only-no-admission",
+  "upstream": {
+    "repository": "https://github.com/libkrun/libkrun",
+    "tag": "v1.19.4",
+    "commit": "728df8125077d0db44265f6e997c72b81b65c015"
+  },
+  "fork": {
+    "repository": "https://github.com/dills122/libkrun",
+    "baselineBranch": "capsule/upstream-v1.19.4",
+    "workBranch": "codex/governed-capsule-v1.19.4"
+  },
+  "capsuleEvidence": {
+    "repository": "https://github.com/dills122/capsule-corp",
+    "reviewedHead": "a3148374e9fc8d6b7ee89aba0cdb18daff897d21",
+    "mergeCommit": "ada09cd2695035774e359552d8a9a9ce061dd4ca"
+  },
+  "patchSetIdentity": {
+    "algorithm": "sha256",
+    "canonicalFormat": "one zero-padded order, colon, patch sha256, newline",
+    "value": "d19fd0ff159c699acccda2621519de45a09408bf3847b418ac34e02b79e805d5"
+  },
+  "patches": [
+    {
+      "order": 1,
+      "file": "patches/0001-pin-libkrunfw-rpath.patch",
+      "sha256": "a845cce3cd479a73c6a698164dc1b466e8d67796018b107077504478e0ec9cd5",
+      "retainedSource": "experiments/gate-c-libkrun-hvf/patches/0001-pin-libkrunfw-rpath.patch"
+    },
+    {
+      "order": 2,
+      "file": "patches/0002-read-only-block-root-mount-flags.patch",
+      "sha256": "b2120d4cc848e138a28165906d6c5cc4da1efee8004e392a7ddddc2334136823",
+      "retainedSource": "experiments/gate-c-libkrun-hvf/patches/0002-read-only-block-root-mount-flags.patch"
+    },
+    {
+      "order": 3,
+      "file": "patches/0003-direct-block-root.patch",
+      "sha256": "642d9e196cbb752347e06a8ce4ca35ea38ef94bf7e15ca9e1b136ed58229ef59",
+      "retainedSource": "experiments/gate-c-libkrun-adversarial/patches/0002-direct-block-root-bootstrap-probe.patch"
+    },
+    {
+      "order": 4,
+      "file": "patches/0004-read-only-raw-root-fd.patch",
+      "sha256": "48cdbc307b3fa1209fa0ec68fc3f817634af312983d68f0de259db86c0b43333",
+      "retainedSource": "experiments/gate-c-libkrun-root-custody/patches/0003-read-only-raw-root-fd.patch"
+    },
+    {
+      "order": 5,
+      "file": "patches/0005-console-correctness.patch",
+      "sha256": "584ce48548fe969684fe3c55e57fbf56e7dae40af28c241c24c47b138faf1283",
+      "retainedSource": "experiments/gate-c-libkrun-console-correctness/patches/0001-console-correctness.patch"
+    }
+  ],
+  "restorationMutations": [
+    { "file": "mutations/restore-duplicate-start.patch", "sha256": "07dfafaf9008d8a0ec588fae398fa6363a3a2575ceb1f6efe36c3bb8344f412d" },
+    { "file": "mutations/restore-malformed-control-acceptance.patch", "sha256": "197ec5b3d5e0b81728a841bfbdd2b38b0f895a98899f6c535694dfcde8434d8d" },
+    { "file": "mutations/restore-stop-blind-output-wait.patch", "sha256": "59d63e70f74586c9c418718cb6b6ec16c1a63b8f23d82501edb38b46e33f44e6" },
+    { "file": "mutations/restore-unchecked-port-id.patch", "sha256": "869e3b4c1959b2c8f7fa8eac919d82ed10ac932288125a15474d111cd7e44221" }
+  ],
+  "governedSourcePaths": [
+    "include/libkrun.h",
+    "src/devices/src/virtio/block/device.rs",
+    "src/devices/src/virtio/console/device.rs",
+    "src/devices/src/virtio/console/port.rs",
+    "src/devices/src/virtio/console/port_io.rs",
+    "src/devices/src/virtio/console/process_tx.rs",
+    "src/init_blob/init/init.c",
+    "src/libkrun/src/lib.rs",
+    "src/vmm/src/resources.rs",
+    "src/vmm/src/vmm_config/block.rs"
+  ]
+}
