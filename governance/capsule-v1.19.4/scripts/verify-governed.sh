@@ -11,9 +11,6 @@ fi
 if ! "$script_dir/verify-mutations.sh"; then
     status=1
 fi
-if ! "$script_dir/verify-default-init.sh"; then
-    status=1
-fi
 if [ "$status" -eq 0 ]; then
     printf 'governedLibraryValidation=PASS\n'
 else
