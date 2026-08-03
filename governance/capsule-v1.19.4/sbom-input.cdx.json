@@ -1,0 +1,22 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "name": "libkrun-capsule-governed-source",
+      "version": "1.19.4+capsule.review",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "externalReferences": [
+        { "type": "vcs", "url": "https://github.com/libkrun/libkrun@728df8125077d0db44265f6e997c72b81b65c015" },
+        { "type": "distribution", "url": "https://github.com/dills122/libkrun" }
+      ],
+      "properties": [
+        { "name": "capsule:status", "value": "review-only-no-admission" },
+        { "name": "capsule:patch-set-sha256", "value": "d19fd0ff159c699acccda2621519de45a09408bf3847b418ac34e02b79e805d5" },
+        { "name": "capsule:cargo-lock-sha256", "value": "9d5dc785636a264794a396ab478821c4ed33acae91650db8d72e8a35733f288c" }
+      ]
+    }
+  }
+}

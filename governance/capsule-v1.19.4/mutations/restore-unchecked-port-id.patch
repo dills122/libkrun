@@ -1,0 +1,11 @@
+diff --git a/src/devices/src/virtio/console/device.rs b/src/devices/src/virtio/console/device.rs
+--- a/src/devices/src/virtio/console/device.rs
++++ b/src/devices/src/virtio/console/device.rs
+@@ -32,5 +32,4 @@ fn checked_port_index(port_count: usize, port_id: u32) -> Option<usize> {
+ fn checked_port_index(port_count: usize, port_id: u32) -> Option<usize> {
+-    usize::try_from(port_id)
+-        .ok()
+-        .filter(|port_id| *port_id < port_count)
++    let _ = port_count;
++    usize::try_from(port_id).ok()
+ }

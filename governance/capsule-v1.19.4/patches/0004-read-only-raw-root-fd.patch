@@ -1,0 +1,554 @@
+diff --git a/include/libkrun.h b/include/libkrun.h
+index b8c9c17b20c69b28f45e5539f8c86ec8111847e7..45a44b20f9e9a9886a8f0b7e664568a91755b463 100644
+--- a/include/libkrun.h
++++ b/include/libkrun.h
+@@ -173,6 +173,33 @@ int32_t krun_set_data_disk(uint32_t ctx_id, const char *disk_path);
+  */
+ int32_t krun_add_disk(uint32_t ctx_id, const char *block_id, const char *disk_path, bool read_only);
+-
++
++/**
++ * Adds one finalized, unlinked, read-only raw regular file descriptor as the
++ * runtime-root block device `vda`.
++ *
++ * This API never accepts or reconstructs a pathname and never probes an image
++ * format. It immediately duplicates `fd`; the caller retains ownership and may
++ * close its descriptor after this function succeeds. The owned duplicate must
++ * be O_RDONLY, mode 0400, unlinked, a regular file, a non-zero multiple of 512
++ * bytes, and match all expected identity fields. Any existing `vda` or legacy
++ * root-disk configuration is rejected.
++ *
++ * Arguments:
++ *  "ctx_id"          - the configuration context ID.
++ *  "fd"              - caller-owned descriptor for the finalized runtime root.
++ *  "expected_device" - st_dev observed by the caller after finalization.
++ *  "expected_inode"  - st_ino observed by the caller after finalization.
++ *  "expected_length" - exact finalized byte length.
++ *
++ * Returns:
++ *  Zero on success or a negative error number on failure.
++ */
++int32_t krun_add_read_only_raw_root_fd(uint32_t ctx_id,
++                                       int fd,
++                                       uint64_t expected_device,
++                                       uint64_t expected_inode,
++                                       uint64_t expected_length);
++
+ /* Supported disk image formats */
+ #define KRUN_DISK_FORMAT_RAW 0
+ #define KRUN_DISK_FORMAT_QCOW2 1
+diff --git a/src/devices/src/virtio/block/device.rs b/src/devices/src/virtio/block/device.rs
+index c943b10e0396996e6e57dd292a9053e22127defa..108f657408f4c884da7bb3eca585e3184dc67dee 100644
+--- a/src/devices/src/virtio/block/device.rs
++++ b/src/devices/src/virtio/block/device.rs
+@@ -9,6 +9,8 @@ use std::cmp;
+ use std::convert::From;
+ use std::fs::{File, OpenOptions};
+ use std::io::{self, Write};
++#[cfg(unix)]
++use std::os::fd::AsRawFd;
+ #[cfg(target_os = "linux")]
+ use std::os::linux::fs::MetadataExt;
+ #[cfg(target_os = "macos")]
+@@ -281,6 +283,111 @@ impl Block {
+             }
+         };
+-
++
++        Self::from_storage(
++            id,
++            partuuid,
++            cache_type,
++            disk_image,
++            disk_image_id,
++            is_disk_read_only,
++            sync_mode,
++            discard_alignment,
++        )
++    }
++
++    /// Create a read-only raw block device from an already-owned descriptor.
++    ///
++    /// This path deliberately has no filename and cannot select a non-raw format.
++    /// Both the identity descriptor and the descriptor transferred to imago are
++    /// revalidated before device construction.
++    #[cfg(unix)]
++    pub fn new_read_only_raw_file(
++        id: String,
++        file: Arc<File>,
++        expected_device: u64,
++        expected_inode: u64,
++        expected_length: u64,
++    ) -> io::Result<Block> {
++        Self::validate_read_only_raw_file(&file, expected_device, expected_inode, expected_length)?;
++        let disk_image_id = DiskProperties::build_disk_image_id(&file);
++
++        let io_file = file.try_clone()?;
++        Self::validate_read_only_raw_file(
++            &io_file,
++            expected_device,
++            expected_inode,
++            expected_length,
++        )?;
++        let file = ImagoFile::try_from(io_file)?;
++        let discard_alignment = file.discard_align();
++        let raw = Raw::<Box<dyn DynStorage>>::open_image_sync(Box::new(file), false)?;
++        let disk_image = SyncFormatAccess::new(raw)?;
++
++        Self::from_storage(
++            id,
++            None,
++            CacheType::Unsafe,
++            disk_image,
++            disk_image_id,
++            true,
++            SyncMode::None,
++            discard_alignment,
++        )
++    }
++
++    #[cfg(unix)]
++    fn validate_read_only_raw_file(
++        file: &File,
++        expected_device: u64,
++        expected_inode: u64,
++        expected_length: u64,
++    ) -> io::Result<()> {
++        if expected_length == 0 || !expected_length.is_multiple_of(SECTOR_SIZE) {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "raw descriptor length must be a non-zero sector multiple",
++            ));
++        }
++
++        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
++        if flags < 0 {
++            return Err(io::Error::last_os_error());
++        }
++        if flags & libc::O_ACCMODE != libc::O_RDONLY {
++            return Err(io::Error::new(
++                io::ErrorKind::PermissionDenied,
++                "raw descriptor is not read-only",
++            ));
++        }
++
++        let metadata = file.metadata()?;
++        if !metadata.is_file()
++            || metadata.st_nlink() != 0
++            || metadata.st_mode() & 0o7777 != 0o400
++            || metadata.st_dev() != expected_device
++            || metadata.st_ino() != expected_inode
++            || metadata.st_size() != expected_length
++        {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "raw descriptor identity or finalized-file invariant mismatch",
++            ));
++        }
++
++        Ok(())
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    fn from_storage(
++        id: String,
++        partuuid: Option<String>,
++        cache_type: CacheType,
++        disk_image: SyncFormatAccess<Box<dyn DynStorage>>,
++        disk_image_id: Vec<u8>,
++        is_disk_read_only: bool,
++        sync_mode: SyncMode,
++        discard_alignment: usize,
++    ) -> io::Result<Block> {
+         let disk_image = Arc::new(Mutex::new(disk_image));
+-
++
+         let disk_properties =
+@@ -442,3 +549,102 @@ impl VirtioDevice for Block {
+         true
+     }
+ }
++
++#[cfg(all(test, unix))]
++mod read_only_raw_fd_tests {
++    use super::*;
++    use std::fs;
++    use std::time::{SystemTime, UNIX_EPOCH};
++
++    fn fixture(keep_writable: bool) -> (Arc<File>, u64, u64, u64) {
++        let nonce = SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .unwrap()
++            .as_nanos();
++        let path = std::env::temp_dir().join(format!(
++            "libkrun-read-only-raw-fd-{}-{nonce}",
++            std::process::id()
++        ));
++        let mut writer = OpenOptions::new()
++            .read(true)
++            .write(true)
++            .create_new(true)
++            .open(&path)
++            .unwrap();
++        writer.write_all(&vec![0x5a; 4096]).unwrap();
++        writer.sync_all().unwrap();
++        assert_eq!(unsafe { libc::fchmod(writer.as_raw_fd(), 0o400) }, 0);
++
++        let file = if keep_writable {
++            writer
++        } else {
++            let reader = OpenOptions::new().read(true).open(&path).unwrap();
++            drop(writer);
++            reader
++        };
++        fs::remove_file(&path).unwrap();
++        let metadata = file.metadata().unwrap();
++        assert_eq!(metadata.st_nlink(), 0);
++        (
++            Arc::new(file),
++            metadata.st_dev(),
++            metadata.st_ino(),
++            metadata.st_size(),
++        )
++    }
++
++    #[test]
++    fn descriptor_native_raw_io_is_positional_and_write_closed() {
++        let (file, device, inode, length) = fixture(false);
++        assert_eq!(
++            unsafe { libc::lseek(file.as_raw_fd(), 37, libc::SEEK_SET) },
++            37
++        );
++        let block = Block::new_read_only_raw_file(
++            "vda".to_string(),
++            Arc::clone(&file),
++            device,
++            inode,
++            length,
++        )
++        .unwrap();
++
++        let mut bytes = [0; 4];
++        block
++            .disk_image
++            .lock()
++            .unwrap()
++            .read(&mut bytes[..], 128)
++            .unwrap();
++        assert_eq!(bytes, [0x5a; 4]);
++        assert!(block
++            .disk_image
++            .lock()
++            .unwrap()
++            .write(&[0x41][..], 0)
++            .is_err());
++        assert_eq!(
++            unsafe { libc::lseek(file.as_raw_fd(), 0, libc::SEEK_CUR) },
++            37
++        );
++    }
++
++    #[test]
++    fn descriptor_native_raw_rejects_writable_and_wrong_identity() {
++        let (writable, device, inode, length) = fixture(true);
++        assert!(
++            Block::new_read_only_raw_file("vda".to_string(), writable, device, inode, length,)
++                .is_err()
++        );
++
++        let (read_only, device, inode, length) = fixture(false);
++        assert!(Block::new_read_only_raw_file(
++            "vda".to_string(),
++            read_only,
++            device,
++            inode.wrapping_add(1),
++            length,
++        )
++        .is_err());
++    }
++}
+diff --git a/src/libkrun/src/lib.rs b/src/libkrun/src/lib.rs
+index be3300fbcf71e5839039a2c489e2c05fa0c57b29..af5020401fee49307aff3fa1241b41959a25f9f7 100644
+--- a/src/libkrun/src/lib.rs
++++ b/src/libkrun/src/lib.rs
+@@ -29,9 +29,13 @@ use std::ffi::CString;
+ use std::ffi::{c_void, CStr};
+ use std::fs::File;
+ use std::io::IsTerminal;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "macos"))]
+ use std::os::fd::AsRawFd;
+ use std::os::fd::{BorrowedFd, FromRawFd, RawFd};
++#[cfg(all(feature = "blk", target_os = "linux"))]
++use std::os::linux::fs::MetadataExt;
++#[cfg(all(feature = "blk", target_os = "macos"))]
++use std::os::macos::fs::MetadataExt;
+ use std::path::PathBuf;
+ use std::slice;
+ use std::sync::atomic::{AtomicI32, Ordering};
+@@ -43,7 +47,7 @@ use vmm::resources::{
+     VmResources, VsockConfig,
+ };
+ #[cfg(feature = "blk")]
+-use vmm::vmm_config::block::{BlockDeviceConfig, BlockRootConfig};
++use vmm::vmm_config::block::{BlockDeviceConfig, BlockRootConfig, ReadOnlyRawRootFdConfig};
+ #[cfg(not(feature = "tee"))]
+ use vmm::vmm_config::external_kernel::{ExternalKernel, KernelFormat};
+ #[cfg(not(feature = "tee"))]
+@@ -177,6 +181,8 @@ struct ContextConfig {
+     #[cfg(feature = "blk")]
+     data_block_cfg: Option<BlockDeviceConfig>,
+     #[cfg(feature = "blk")]
++    read_only_raw_root_fd: Option<ReadOnlyRawRootFdConfig>,
++    #[cfg(feature = "blk")]
+     block_root: Option<BlockRootConfig>,
+     #[cfg(feature = "tee")]
+     tee_config_file: Option<PathBuf>,
+@@ -311,6 +317,11 @@ impl ContextConfig {
+         }
+     }
+-
++
++    #[cfg(feature = "blk")]
++    fn conflicts_with_read_only_raw_root(&self, block_id: &str) -> bool {
++        block_id == "vda" && self.read_only_raw_root_fd.is_some()
++    }
++
+     #[cfg(feature = "net")]
+     fn set_net_mac(&mut self, mac: [u8; 6]) {
+         self.legacy_mac = Some(mac);
+@@ -778,6 +789,9 @@ pub unsafe extern "C" fn krun_add_disk(
+     match CTX_MAP.lock().unwrap().entry(ctx_id) {
+         Entry::Occupied(mut ctx_cfg) => {
+             let cfg = ctx_cfg.get_mut();
++            if cfg.conflicts_with_read_only_raw_root(block_id) {
++                return -libc::EEXIST;
++            }
+             let block_device_config = BlockDeviceConfig {
+                 block_id: block_id.to_string(),
+                 cache_type: CacheType::auto(disk_path),
+@@ -798,6 +812,84 @@ pub unsafe extern "C" fn krun_add_disk(
+     KRUN_SUCCESS
+ }
+-
++
++/// Add Capsule's finalized runtime root as one read-only raw `vda` device.
++///
++/// The caller retains ownership of `fd`. libkrun immediately duplicates it,
++/// validates the owned duplicate, stores no pathname, and rejects every
++/// writable, linked, non-regular, incorrectly sized, or wrong-identity input.
++#[no_mangle]
++#[cfg(all(feature = "blk", unix))]
++pub extern "C" fn krun_add_read_only_raw_root_fd(
++    ctx_id: u32,
++    fd: c_int,
++    expected_device: u64,
++    expected_inode: u64,
++    expected_length: u64,
++) -> i32 {
++    if fd < 0
++        || expected_device == 0
++        || expected_inode == 0
++        || expected_length == 0
++        || !expected_length.is_multiple_of(512)
++    {
++        return -libc::EINVAL;
++    }
++
++    let owned_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
++    if owned_fd < 0 {
++        return -std::io::Error::last_os_error()
++            .raw_os_error()
++            .unwrap_or(libc::EIO);
++    }
++    let file = unsafe { File::from_raw_fd(owned_fd) };
++
++    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
++    if flags < 0 {
++        return -std::io::Error::last_os_error()
++            .raw_os_error()
++            .unwrap_or(libc::EIO);
++    }
++    if flags & libc::O_ACCMODE != libc::O_RDONLY {
++        return -libc::EACCES;
++    }
++
++    let metadata = match file.metadata() {
++        Ok(metadata) => metadata,
++        Err(error) => return -error.raw_os_error().unwrap_or(libc::EIO),
++    };
++    if !metadata.is_file()
++        || metadata.st_nlink() != 0
++        || metadata.st_mode() & 0o7777 != 0o400
++        || metadata.st_size() != expected_length
++    {
++        return -libc::EINVAL;
++    }
++    if metadata.st_dev() != expected_device || metadata.st_ino() != expected_inode {
++        return -libc::ESTALE;
++    }
++
++    match CTX_MAP.lock().unwrap().entry(ctx_id) {
++        Entry::Occupied(mut ctx_cfg) => {
++            let cfg = ctx_cfg.get_mut();
++            if cfg.read_only_raw_root_fd.is_some()
++                || cfg.root_block_cfg.is_some()
++                || cfg.block_cfgs.iter().any(|config| config.block_id == "vda")
++            {
++                return -libc::EEXIST;
++            }
++            cfg.read_only_raw_root_fd = Some(ReadOnlyRawRootFdConfig {
++                file: std::sync::Arc::new(file),
++                expected_device,
++                expected_inode,
++                expected_length,
++            });
++        }
++        Entry::Vacant(_) => return -libc::ENOENT,
++    }
++
++    KRUN_SUCCESS
++}
++
+ #[allow(clippy::missing_safety_doc)]
+ #[no_mangle]
+ #[cfg(feature = "blk")]
+@@ -826,6 +918,9 @@ pub unsafe extern "C" fn krun_add_disk2(
+     match CTX_MAP.lock().unwrap().entry(ctx_id) {
+         Entry::Occupied(mut ctx_cfg) => {
+             let cfg = ctx_cfg.get_mut();
++            if cfg.conflicts_with_read_only_raw_root(block_id) {
++                return -libc::EEXIST;
++            }
+             let block_device_config = BlockDeviceConfig {
+                 block_id: block_id.to_string(),
+                 cache_type: CacheType::auto(disk_path),
+@@ -881,6 +976,9 @@ pub unsafe extern "C" fn krun_add_disk3(
+     match CTX_MAP.lock().unwrap().entry(ctx_id) {
+         Entry::Occupied(mut ctx_cfg) => {
+             let cfg = ctx_cfg.get_mut();
++            if cfg.conflicts_with_read_only_raw_root(block_id) {
++                return -libc::EEXIST;
++            }
+             let block_device_config = BlockDeviceConfig {
+                 block_id: block_id.to_string(),
+                 cache_type: CacheType::auto(disk_path),
+@@ -910,6 +1008,9 @@ pub unsafe extern "C" fn krun_set_root_disk(ctx_id: u32, c_disk_path: *const c_c
+     match CTX_MAP.lock().unwrap().entry(ctx_id) {
+         Entry::Occupied(mut ctx_cfg) => {
+             let cfg = ctx_cfg.get_mut();
++            if cfg.read_only_raw_root_fd.is_some() {
++                return -libc::EEXIST;
++            }
+             let block_device_config = BlockDeviceConfig {
+                 block_id: "root".to_string(),
+                 cache_type: CacheType::auto(disk_path),
+@@ -2377,7 +2478,7 @@ pub unsafe extern "C" fn krun_set_root_disk_remount(
+                 return -libc::EINVAL;
+             }
+-
++
+-            if ctx_cfg.block_cfgs.is_empty() {
++            if ctx_cfg.block_cfgs.is_empty() && ctx_cfg.read_only_raw_root_fd.is_none() {
+                 error!("No block devices configured");
+                 return -libc::EINVAL;
+             }
+@@ -2877,6 +2978,14 @@ pub extern "C" fn krun_start_enter(ctx_id: u32) -> i32 {
+         }
+     }
+-
++
++    #[cfg(feature = "blk")]
++    if let Some(raw_root) = ctx_cfg.read_only_raw_root_fd.clone() {
++        if ctx_cfg.vmr.add_read_only_raw_root_fd(raw_root).is_err() {
++            error!("Error configuring read-only raw root descriptor");
++            return -libc::EINVAL;
++        }
++    }
++
+     #[cfg(feature = "blk")]
+     for block_cfg in ctx_cfg.get_block_cfg() {
+         if ctx_cfg.vmr.add_block_device(block_cfg).is_err() {
+diff --git a/src/vmm/src/resources.rs b/src/vmm/src/resources.rs
+index 2d3e5ef2b10161f667449f6f266dfb5aa7c543ab..ae0335556ce3861f0917dfe05dbdc88386a93fb1 100644
+--- a/src/vmm/src/resources.rs
++++ b/src/vmm/src/resources.rs
+@@ -14,7 +14,9 @@ use std::path::PathBuf;
+ use serde::{Deserialize, Serialize};
+-
++
+ #[cfg(feature = "blk")]
+-use crate::vmm_config::block::{BlockBuilder, BlockConfigError, BlockDeviceConfig};
++use crate::vmm_config::block::{
++    BlockBuilder, BlockConfigError, BlockDeviceConfig, ReadOnlyRawRootFdConfig,
++};
+ use crate::vmm_config::external_kernel::ExternalKernel;
+ use crate::vmm_config::firmware::FirmwareConfig;
+ #[cfg(not(feature = "tee"))]
+@@ -329,6 +331,14 @@ impl VmResources {
+         self.block.insert(config)
+     }
+-
++
++    #[cfg(feature = "blk")]
++    pub fn add_read_only_raw_root_fd(
++        &mut self,
++        config: ReadOnlyRawRootFdConfig,
++    ) -> Result<BlockConfigError> {
++        self.block.insert_read_only_raw_root(config)
++    }
++
+     /// Sets a vsock device to be attached when the VM starts.
+     pub fn set_vsock_device(&mut self, config: VsockDeviceConfig) -> Result<VsockConfigError> {
+         self.vsock.insert(config)
+diff --git a/src/vmm/src/vmm_config/block.rs b/src/vmm/src/vmm_config/block.rs
+index 788be5a39a15336334a8006912307bde1956b84d..be6a9f6c6d4f6b651bc2b87c541d3b26b83872f4 100644
+--- a/src/vmm/src/vmm_config/block.rs
++++ b/src/vmm/src/vmm_config/block.rs
+@@ -1,5 +1,6 @@
+ use std::collections::VecDeque;
+ use std::fmt;
++use std::fs::File;
+ use std::sync::{Arc, Mutex};
+-
++
+ use devices::virtio::{
+@@ -35,6 +36,14 @@ pub struct BlockDeviceConfig {
+     pub sync_mode: SyncMode,
+ }
+-
++
++#[derive(Clone, Debug)]
++pub struct ReadOnlyRawRootFdConfig {
++    pub file: Arc<File>,
++    pub expected_device: u64,
++    pub expected_inode: u64,
++    pub expected_length: u64,
++}
++
+ #[derive(Clone, Debug, Eq, PartialEq)]
+ pub struct BlockRootConfig {
+     pub device: String,
+@@ -60,6 +69,21 @@ impl BlockBuilder {
+         Ok(())
+     }
+-
++
++    pub fn insert_read_only_raw_root(&mut self, config: ReadOnlyRawRootFdConfig) -> Result<()> {
++        let block_dev = Arc::new(Mutex::new(
++            devices::virtio::Block::new_read_only_raw_file(
++                "vda".to_string(),
++                config.file,
++                config.expected_device,
++                config.expected_inode,
++                config.expected_length,
++            )
++            .map_err(BlockConfigError::CreateBlockDevice)?,
++        ));
++        self.list.push_back(block_dev);
++        Ok(())
++    }
++
+     pub fn create_block(config: BlockDeviceConfig) -> Result<Block> {
+         devices::virtio::Block::new(
+             config.block_id,
