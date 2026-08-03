@@ -80,7 +80,7 @@ const KRUNFW_NAME: &str = "libkrunfw-sev.so.5";
 #[cfg(all(target_os = "linux", feature = "tdx"))]
 const KRUNFW_NAME: &str = "libkrunfw-tdx.so.5";
 #[cfg(target_os = "macos")]
-const KRUNFW_NAME: &str = "libkrunfw.5.dylib";
+const KRUNFW_NAME: &str = "@rpath/libkrunfw.5.dylib";
 
 #[cfg(feature = "aws-nitro")]
 static KRUN_NITRO_DEBUG: Mutex<bool> = Mutex::new(false);
