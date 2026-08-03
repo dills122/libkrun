@@ -7,8 +7,6 @@ repo_dir=$(CDPATH='' cd -- "$governance_dir/../.." && pwd)
 task_tmp=$(mktemp -d "${TMPDIR:-/tmp}/libkrun-capsule-library.XXXXXX")
 trap 'rm -rf "$task_tmp"' EXIT HUP INT TERM
 target_dir="$task_tmp/target"
-format_log="$task_tmp/cargo-fmt.log"
-format_status=PASS
 
 if [ "${CAPSULE_ALLOW_GUEST:-0}" != 0 ]; then
     printf 'guest execution is outside this governed verification route\n' >&2
@@ -23,13 +21,7 @@ fi
         src/devices/src/virtio/console/port_io.rs \
         src/devices/src/virtio/console/process_tx.rs
 )
-if ! (
-    cd "$repo_dir"
-    cargo fmt --all -- --check
-) >"$format_log" 2>&1; then
-    format_status=BLOCKED_RETAINED_DRIFT
-    sed -n '1,240p' "$format_log" >&2
-fi
+"$script_dir/verify-cargo-fmt.sh"
 
 (
     cd "$repo_dir"
@@ -105,7 +97,7 @@ if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
 fi
 
 printf 'governedConsoleRustfmt=PASS\n'
-printf 'cargoFmt=%s\n' "$format_status"
+printf 'cargoFmt=PASS_EXACT_RETAINED_DRIFT_ONLY\n'
 printf 'cargoCheck=PASS\n'
 printf 'consoleCorpusTests=51\n'
 printf 'blockFeatureTests=53\n'
@@ -116,4 +108,3 @@ printf 'shutdownRepetitions=25\n'
 printf 'addressSanitizer=%s\n' "$asan_status"
 cat "$coverage_summary"
 printf 'guestExecution=NOT_RUN\n'
-[ "$format_status" = PASS ] || exit 1

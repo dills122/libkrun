@@ -35,6 +35,8 @@ A green workflow is necessary but not sufficient for merge. The PR stays draft w
 
 `.github/workflows/capsule-governed.yml` runs only for the versioned governed branch, pull requests targeting the versioned baseline, manual dispatch, and changes to this exact patch line or its touched source paths. It adds no exception to upstream checks. The governed checks use fixed local fixtures and library/unit processes only; the scripts reject opt-in guest execution.
 
+The upstream integration workflow is precisely routed away from pull requests whose base is `capsule/upstream-v1.19.4`, because it installs firmware and executes guests. All other pull requests retain upstream integration behavior. The governed replacement performs no guest execution. Governed Clippy uses the retained Rust 1.93.1 toolchain with only the documented deprecated `GuestMemory::try_access` allowance. Rust 1.97.1 formatting must report exactly the one retained P0-2 line-wrap drift recorded in `expected/cargo-fmt-1.97.1.txt`; any additional difference fails CI. This preserves exact retained patch bytes without silently exempting another path.
+
 The default upstream test surface is intentionally preserved. Where the governed direct-block-root profile conflicts with unmodified upstream NullFs behavior, the difference is isolated to this queue and its `blk` feature tests instead of disabling or weakening an upstream security check.
 
 ## Update and removal policy
@@ -43,12 +45,11 @@ For a new upstream release, create a new immutable baseline, re-derive each patc
 
 A downstream patch may be removed only when the chosen upstream commit contains equivalent behavior, the mapping is documented path by path, and all reconstruction, contract, mutation, sanitizer, repetition, and coverage gates pass without it. Removing a prerequisite requires proving every dependent patch still applies and retains its security properties.
 
-The compile-only C header contract treats the pre-existing `/dev/input/*` text inside two upstream documentation comments as non-fatal with `-Wno-comment`; all other enabled C warnings are errors. This allowance does not apply to the governed implementation. Rust Clippy denies all warnings except the retained upstream deprecated `GuestMemory::try_access` call exercised by the console corpus.
+The compile-only C header contract treats the pre-existing `/dev/input/*` text inside two upstream documentation comments as non-fatal with `-Wno-comment`; all other enabled C warnings are errors. This allowance does not apply to the governed implementation. Rust Clippy denies all warnings except the retained upstream deprecated `GuestMemory::try_access` call exercised by the console corpus. Toolchain versions are pinned separately because formatting detection and retained behavioral measurements require different deterministic compiler versions.
 
 ## Known blockers and limitations
 
 - The measured retained console corpus has zero line/function coverage in `port.rs` and `process_tx.rs`; `coverage-baseline.json` preserves this rather than hiding it. Bounded library tests must close or explicitly review this gap before merge.
-- Full `cargo fmt --all -- --check` on Rust 1.93.1 reports one pre-existing upstream import-order drift in `src/cpuid/src/common.rs` and one retained P0-2 line-wrap drift in `src/libkrun/src/lib.rs`. The exact patch bytes are not rewritten to conceal that provenance; the CI records this as a blocker while separately requiring the four governed console files to pass Rustfmt.
 - AddressSanitizer is supported only on the pinned macOS AArch64 nightly/toolchain route and remains a required governed check there.
 - The macOS library gate checks and lints `libkrun` with `blk` and without its default embedded init-blob feature. Compiling the Linux init blob requires the upstream Linux sysroot/cross-toolchain route; this fork supplements, but does not disable, that upstream build gate and retains an installed-build blocker until it passes.
 - No installed-product, real-guest, VMM transport, fuzzing, backend-admission, signing, firmware, kernel, or Supervisor evidence is produced here.

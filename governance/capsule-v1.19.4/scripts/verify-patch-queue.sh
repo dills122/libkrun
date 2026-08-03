@@ -35,7 +35,7 @@ expected_hash_for() {
 }
 
 git -C "$repo_dir" cat-file -e "$base_commit^{commit}"
-actual_base=$(git -C "$repo_dir" rev-parse refs/heads/capsule/upstream-v1.19.4 2>/dev/null || git -C "$repo_dir" rev-parse refs/remotes/origin/capsule/upstream-v1.19.4)
+actual_base=$(git -C "$repo_dir" rev-parse --verify refs/heads/capsule/upstream-v1.19.4 2>/dev/null || git -C "$repo_dir" rev-parse --verify refs/remotes/origin/capsule/upstream-v1.19.4)
 [ "$actual_base" = "$base_commit" ] || {
     printf 'baseline branch moved: got %s, want %s\n' "$actual_base" "$base_commit" >&2
     exit 1

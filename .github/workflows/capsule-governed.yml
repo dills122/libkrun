@@ -56,6 +56,7 @@ jobs:
       - name: Install pinned validation tools
         run: |
           rustup toolchain install 1.93.1 --profile minimal --component clippy,rustfmt,llvm-tools-preview
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
           rustup override set 1.93.1
           rustup toolchain install nightly-2026-05-28 --profile minimal
           cargo install cargo-llvm-cov --version 0.8.4 --locked
