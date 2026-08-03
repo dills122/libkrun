@@ -1364,6 +1364,14 @@ int main(int argc, char **argv)
     }
 
 #if __linux__
+    if (getenv("KRUN_DIRECT_BLOCK_ROOT")) {
+        if (mount(NULL, "/", NULL,
+                  MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL) < 0) {
+            perror("remount direct block root");
+            exit(-1);
+        }
+    }
+
     krun_root = clone_str(getenv("KRUN_BLOCK_ROOT_DEVICE"));
     if (krun_root) {
         unsigned long krun_root_mount_flags = 0;
