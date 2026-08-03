@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{io, thread};
 
+use utils::eventfd::EventFd;
 use vm_memory::{GuestMemory, GuestMemoryError, GuestMemoryMmap, GuestMemoryRegion};
 
 use crate::virtio::console::port_io::PortOutput;
@@ -12,6 +13,7 @@ pub(crate) fn process_tx(
     mut queue: Queue,
     interrupt: InterruptTransport,
     output: Arc<Mutex<Box<dyn PortOutput + Send>>>,
+    stopfd: EventFd,
     stop: Arc<AtomicBool>,
 ) {
     loop {
@@ -22,15 +24,23 @@ pub(crate) fn process_tx(
         let head_index = head.index;
         let mut bytes_written = 0;
 
-        for desc in head.into_iter().readable() {
+        'descriptors: for desc in head.into_iter().readable() {
             let desc_len = desc.len as usize;
-            match write_desc_to_output(desc, output.lock().unwrap().as_mut(), &interrupt) {
+            match write_desc_to_output(
+                desc,
+                output.lock().unwrap().as_mut(),
+                &interrupt,
+                &stopfd,
+                &stop,
+            ) {
                 Ok(0) => {
                     break;
                 }
                 Ok(n) => {
-                    assert_eq!(n, desc_len);
                     bytes_written += n;
+                    if n < desc_len {
+                        break 'descriptors;
+                    }
                 }
                 Err(e) => {
                     log::error!("Failed to write output: {e}");
@@ -82,14 +92,21 @@ fn write_desc_to_output(
     desc: DescriptorChain,
     output: &mut (dyn PortOutput + Send),
     interrupt: &InterruptTransport,
+    stopfd: &EventFd,
+    stop: &AtomicBool,
 ) -> Result<usize, GuestMemoryError> {
     // TODO: Switch to using `get_slices()` with the next vm-memory
     //       bump.
     #[allow(deprecated)]
-    desc.mem
+    let mut deferred_error = None;
+    let result = desc
+        .mem
         .try_access(desc.len as usize, desc.addr, |_, len, addr, region| {
             let src = region.get_slice(addr, len).unwrap();
             loop {
+                if stop.load(Ordering::Acquire) {
+                    return Ok(0);
+                }
                 log::trace!("Tx {src:?}, write_volatile {len} bytes");
                 match output.write_volatile(&src) {
                     // try_access seem to handle partial write for us (we will be invoked again with an offset)
@@ -98,10 +115,24 @@ fn write_desc_to_output(
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         log::trace!("Tx wait for output (would block)");
                         interrupt.signal_used_queue();
-                        output.wait_until_writable();
+                        if !output.wait_until_writable(Some(stopfd)) {
+                            return Ok(0);
+                        }
                     }
-                    Err(e) => break Err(GuestMemoryError::IOError(e)),
+                    Err(e) => {
+                        deferred_error = Some(GuestMemoryError::IOError(e));
+                        break Ok(0);
+                    }
                 }
             }
-        })
+        });
+
+    match (result, deferred_error) {
+        (Ok(0), Some(error)) => Err(error),
+        (Ok(bytes_written), Some(error)) => {
+            log::error!("Console output stopped after {bytes_written} bytes: {error}");
+            Ok(bytes_written)
+        }
+        (result, _) => result,
+    }
 }
