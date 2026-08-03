@@ -34,6 +34,9 @@ pub(crate) fn process_tx(
                 &stop,
             ) {
                 Ok(0) => {
+                    if stop.load(Ordering::Acquire) {
+                        return;
+                    }
                     break;
                 }
                 Ok(n) => {
@@ -58,6 +61,8 @@ pub(crate) fn process_tx(
         if bytes_written == 0 {
             log::trace!("Tx Add used {bytes_written}");
             queue.undo_pop();
+            interrupt.signal_used_queue();
+            thread::park();
         } else {
             log::trace!("Tx add used {bytes_written}");
             if let Err(e) = queue.add_used(&mem, head_index, bytes_written as u32) {

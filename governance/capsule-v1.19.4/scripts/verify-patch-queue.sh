@@ -4,7 +4,8 @@ set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 governance_dir=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 repo_dir=$(CDPATH='' cd -- "$governance_dir/../.." && pwd)
-base_commit=728df8125077d0db44265f6e997c72b81b65c015
+upstream_commit=728df8125077d0db44265f6e997c72b81b65c015
+governed_base_commit=4ea8d1de861ed1c0636fc800b6da8fb71a086aa5
 patch_set_sha256=d19fd0ff159c699acccda2621519de45a09408bf3847b418ac34e02b79e805d5
 
 patches='0001-pin-libkrunfw-rpath.patch
@@ -34,10 +35,11 @@ expected_hash_for() {
     esac
 }
 
-git -C "$repo_dir" cat-file -e "$base_commit^{commit}"
+git -C "$repo_dir" cat-file -e "$upstream_commit^{commit}"
+git -C "$repo_dir" cat-file -e "$governed_base_commit^{commit}"
 actual_base=$(git -C "$repo_dir" rev-parse --verify refs/heads/capsule/upstream-v1.19.4 2>/dev/null || git -C "$repo_dir" rev-parse --verify refs/remotes/origin/capsule/upstream-v1.19.4)
-[ "$actual_base" = "$base_commit" ] || {
-    printf 'baseline branch moved: got %s, want %s\n' "$actual_base" "$base_commit" >&2
+[ "$actual_base" = "$governed_base_commit" ] || {
+    printf 'governed baseline branch moved: got %s, want %s\n' "$actual_base" "$governed_base_commit" >&2
     exit 1
 }
 
@@ -45,7 +47,7 @@ task_tmp=$(mktemp -d "${TMPDIR:-/tmp}/libkrun-capsule-patches.XXXXXX")
 trap 'rm -rf "$task_tmp"' EXIT HUP INT TERM
 reconstructed="$task_tmp/reconstructed"
 mkdir -p "$reconstructed"
-git -C "$repo_dir" archive "$base_commit" | tar -x -C "$reconstructed"
+git -C "$repo_dir" archive "$upstream_commit" | tar -x -C "$reconstructed"
 
 identity_file="$task_tmp/identities"
 : >"$identity_file"
@@ -70,7 +72,9 @@ actual_patch_set=$(shasum -a 256 "$identity_file" | awk '{print $1}')
 }
 
 for governed_path in $governed_paths; do
-    cmp "$reconstructed/$governed_path" "$repo_dir/$governed_path"
+    governed_base_path="$task_tmp/governed-base"
+    git -C "$repo_dir" show "$governed_base_commit:$governed_path" >"$governed_base_path"
+    cmp "$reconstructed/$governed_path" "$governed_base_path"
 done
 
 for patch_name in \
@@ -82,7 +86,8 @@ for patch_name in \
     patch -d "$reconstructed" -p1 --batch --reverse --dry-run <"$governance_dir/patches/$patch_name" >/dev/null
 done
 
-printf 'baseCommit=%s\n' "$base_commit"
+printf 'upstreamCommit=%s\n' "$upstream_commit"
+printf 'governedBaseCommit=%s\n' "$governed_base_commit"
 printf 'patchSetSha256=%s\n' "$actual_patch_set"
 printf 'cleanReconstruction=PASS\n'
 printf 'reverseDryRun=PASS\n'

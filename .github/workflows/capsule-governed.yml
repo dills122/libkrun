@@ -13,11 +13,13 @@ on:
       - src/devices/src/virtio/console/**
       - src/init_blob/init/init.c
       - src/libkrun/src/lib.rs
+      - src/libkrun/tests/**
       - src/vmm/src/resources.rs
       - src/vmm/src/vmm_config/block.rs
   push:
     branches:
       - codex/governed-capsule-v1.19.4
+      - codex/governed-console-fd-coverage-v1.19.4
     paths:
       - .github/CODEOWNERS
       - .github/workflows/capsule-governed.yml
@@ -27,6 +29,7 @@ on:
       - src/devices/src/virtio/console/**
       - src/init_blob/init/init.c
       - src/libkrun/src/lib.rs
+      - src/libkrun/tests/**
       - src/vmm/src/resources.rs
       - src/vmm/src/vmm_config/block.rs
   workflow_dispatch:

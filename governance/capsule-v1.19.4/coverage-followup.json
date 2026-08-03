@@ -1,0 +1,55 @@
+{
+  "status": "local library coverage only; not real transport, guest, VMM, or admission evidence",
+  "sourceEvidenceDate": "2026-08-03",
+  "governedBaseCommit": "4ea8d1de861ed1c0636fc800b6da8fb71a086aa5",
+  "corpus": {
+    "retainedDefaultTests": 51,
+    "retainedBlockFeatureTests": 53,
+    "boundedConsolePropertyTests": 4,
+    "rawFdLibraryBoundaryTests": 2
+  },
+  "before": {
+    "aggregateChangedConsoleFiles": {
+      "functions": { "count": 88, "covered": 13, "percent": 14.772727 },
+      "lines": { "count": 728, "covered": 90, "percent": 12.362637 },
+      "regions": { "count": 1091, "covered": 156, "percent": 14.298808 }
+    },
+    "files": [
+      {
+        "file": "src/devices/src/virtio/console/port.rs",
+        "functions": { "count": 17, "covered": 0, "percent": 0.0 },
+        "lines": { "count": 137, "covered": 0, "percent": 0.0 },
+        "regions": { "count": 172, "covered": 0, "percent": 0.0 }
+      },
+      {
+        "file": "src/devices/src/virtio/console/process_tx.rs",
+        "functions": { "count": 4, "covered": 0, "percent": 0.0 },
+        "lines": { "count": 91, "covered": 0, "percent": 0.0 },
+        "regions": { "count": 120, "covered": 0, "percent": 0.0 }
+      }
+    ]
+  },
+  "after": {
+    "aggregateChangedConsoleFiles": {
+      "functions": { "count": 88, "covered": 37, "percent": 42.045455 },
+      "lines": { "count": 733, "covered": 298, "percent": 40.654843 },
+      "regions": { "count": 1099, "covered": 399, "percent": 36.305732 }
+    },
+    "files": [
+      {
+        "file": "src/devices/src/virtio/console/port.rs",
+        "functions": { "count": 17, "covered": 15, "percent": 88.235294 },
+        "lines": { "count": 137, "covered": 111, "percent": 81.021898 },
+        "regions": { "count": 173, "covered": 121, "percent": 69.942197 },
+        "remaining": { "functions": 2, "lines": 26, "regions": 52 }
+      },
+      {
+        "file": "src/devices/src/virtio/console/process_tx.rs",
+        "functions": { "count": 4, "covered": 4, "percent": 100.0 },
+        "lines": { "count": 96, "covered": 82, "percent": 85.416667 },
+        "regions": { "count": 127, "covered": 102, "percent": 80.314961 },
+        "remaining": { "functions": 0, "lines": 14, "regions": 25 }
+      }
+    ]
+  }
+}
