@@ -178,9 +178,9 @@ impl Port {
         if let PortState::Active {
             stopfd,
             stop,
-            tx_thread,
-            rx_thread,
-        } = &mut self.state
+            mut tx_thread,
+            mut rx_thread,
+        } = mem::replace(&mut self.state, PortState::Inactive)
         {
             stop.store(true, Ordering::Release);
             if let Err(e) = stopfd.write(1) {
@@ -189,7 +189,7 @@ impl Port {
                     port_id = self.port_id
                 );
             }
-            if let Some(tx_thread) = mem::take(tx_thread) {
+            if let Some(tx_thread) = tx_thread.take() {
                 tx_thread.thread().unpark();
                 if let Err(e) = tx_thread.join() {
                     log::error!(
@@ -198,7 +198,7 @@ impl Port {
                     )
                 }
             }
-            if let Some(rx_thread) = mem::take(rx_thread) {
+            if let Some(rx_thread) = rx_thread.take() {
                 rx_thread.thread().unpark();
                 if let Err(e) = rx_thread.join() {
                     log::error!(

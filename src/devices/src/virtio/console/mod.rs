@@ -1,4 +1,6 @@
 mod console_control;
+#[cfg(test)]
+mod coverage_tests;
 mod device;
 mod event_handler;
 mod port;

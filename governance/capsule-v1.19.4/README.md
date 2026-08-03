@@ -1,6 +1,6 @@
 # Capsule governed libkrun v1.19.4 patch line
 
-This directory governs one narrowly scoped downstream patch queue over the immutable upstream libkrun v1.19.4 commit `728df8125077d0db44265f6e997c72b81b65c015`. The baseline branch is `capsule/upstream-v1.19.4`; the proposed work branch is `codex/governed-capsule-v1.19.4`.
+This directory governs one narrowly scoped downstream patch queue over the immutable upstream libkrun v1.19.4 commit `728df8125077d0db44265f6e997c72b81b65c015`. The queue was merged as `4ea8d1de861ed1c0636fc800b6da8fb71a086aa5`, which is the immutable head of `capsule/upstream-v1.19.4`; follow-up coverage work uses `codex/governed-console-fd-coverage-v1.19.4`.
 
 This line is local library and source-governance evidence only. It does not admit a Capsule backend or profile, create or execute a guest, wire product code, change libkrunfw or a kernel, exercise a Supervisor, sign a release, or grant path, image, network, mount, write, or deployment authority.
 
@@ -18,7 +18,7 @@ The first two patches are prerequisites. They remain independently hashed and ar
 
 ## Review and branch policy
 
-The baseline branch is an immutable pointer to the exact upstream tag commit. It must never be rebased, force-pushed, or advanced. Updates use a new versioned baseline and work branch.
+The upstream anchor and the governed merge are immutable. The baseline branch must remain at the exact governed merge commit and must never be rebased, force-pushed, or advanced. Updates use a new versioned baseline and work branch. Patch reconstruction always starts from the upstream anchor and compares the retained queue to the governed merge, so reviewed follow-up changes cannot rewrite its provenance.
 
 Changes to this line require:
 
@@ -49,7 +49,8 @@ The compile-only C header contract treats the pre-existing `/dev/input/*` text i
 
 ## Known blockers and limitations
 
-- The measured retained console corpus has zero line/function coverage in `port.rs` and `process_tx.rs`; `coverage-baseline.json` preserves this rather than hiding it. Bounded library tests must close or explicitly review this gap before merge.
+- `coverage-baseline.json` preserves the original zero line/function coverage in `port.rs` and `process_tx.rs`. The follow-up bounded library corpus must report exact before/after measurements without rewriting that baseline evidence.
+- `coverage-followup.json` records the bounded follow-up measurement and the remaining uncovered functions, lines, and regions for those two files.
 - AddressSanitizer is supported only on the pinned macOS AArch64 nightly/toolchain route and remains a required governed check there.
 - The macOS library gate checks and lints `libkrun` with `blk` and without its default embedded init-blob feature. Compiling the Linux init blob requires the upstream Linux sysroot/cross-toolchain route; this fork supplements, but does not disable, that upstream build gate and retains an installed-build blocker until it passes.
 - No installed-product, real-guest, VMM transport, fuzzing, backend-admission, signing, firmware, kernel, or Supervisor evidence is produced here.

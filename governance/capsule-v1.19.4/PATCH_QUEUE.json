@@ -10,7 +10,8 @@
   "fork": {
     "repository": "https://github.com/dills122/libkrun",
     "baselineBranch": "capsule/upstream-v1.19.4",
-    "workBranch": "codex/governed-capsule-v1.19.4"
+    "baselineCommit": "4ea8d1de861ed1c0636fc800b6da8fb71a086aa5",
+    "workBranch": "codex/governed-console-fd-coverage-v1.19.4"
   },
   "capsuleEvidence": {
     "repository": "https://github.com/dills122/capsule-corp",
