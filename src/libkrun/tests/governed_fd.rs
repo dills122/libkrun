@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(all(unix, feature = "blk"))]
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
