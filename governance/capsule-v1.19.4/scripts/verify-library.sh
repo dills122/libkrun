@@ -43,7 +43,8 @@ blk_log="$task_tmp/blk-tests.log"
 (
     cd "$repo_dir"
     CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$target_dir/tests-blk" \
-        cargo test --locked --offline -p krun-devices --lib --features blk
+        cargo test --locked --offline -p krun-devices --lib --features blk -- \
+        --test-threads=1
 ) | tee "$blk_log"
 grep -Eq 'test result: ok\. 53 passed; 0 failed' "$blk_log"
 
