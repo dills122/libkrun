@@ -37,9 +37,9 @@ expected_hash_for() {
 
 git -C "$repo_dir" cat-file -e "$upstream_commit^{commit}"
 git -C "$repo_dir" cat-file -e "$governed_base_commit^{commit}"
-actual_base=$(git -C "$repo_dir" rev-parse --verify refs/heads/capsule/upstream-v1.19.4 2>/dev/null || git -C "$repo_dir" rev-parse --verify refs/remotes/origin/capsule/upstream-v1.19.4)
+actual_base=$(git -C "$repo_dir" rev-parse --verify refs/heads/capsule/baseline-v1.19.4-r1 2>/dev/null || git -C "$repo_dir" rev-parse --verify refs/remotes/origin/capsule/baseline-v1.19.4-r1)
 [ "$actual_base" = "$governed_base_commit" ] || {
-    printf 'governed baseline branch moved: got %s, want %s\n' "$actual_base" "$governed_base_commit" >&2
+    printf 'governed immutable baseline moved: got %s, want %s\n' "$actual_base" "$governed_base_commit" >&2
     exit 1
 }
 

@@ -37,7 +37,7 @@ default_log="$task_tmp/default-tests.log"
     CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$target_dir/tests" \
         cargo test --locked --offline -p krun-devices --lib
 ) | tee "$default_log"
-grep -Eq 'test result: ok\. 51 passed; 0 failed' "$default_log"
+grep -Eq 'test result: ok\. 53 passed; 0 failed' "$default_log"
 
 bounded_console_log="$task_tmp/bounded-console-tests.log"
 (
@@ -55,7 +55,7 @@ blk_log="$task_tmp/blk-tests.log"
         cargo test --locked --offline -p krun-devices --lib --features blk -- \
         --test-threads=1
 ) | tee "$blk_log"
-grep -Eq 'test result: ok\. 53 passed; 0 failed' "$blk_log"
+grep -Eq 'test result: ok\. 55 passed; 0 failed' "$blk_log"
 
 raw_fd_log="$task_tmp/raw-fd-tests.log"
 (
@@ -145,9 +145,9 @@ fi
 printf 'governedConsoleRustfmt=PASS\n'
 printf 'cargoFmt=PASS_EXACT_RETAINED_DRIFT_ONLY\n'
 printf 'cargoCheck=PASS\n'
-printf 'consoleCorpusTests=51\n'
+printf 'consoleCorpusTests=53\n'
 printf 'boundedConsoleCoverageTests=4\n'
-printf 'blockFeatureTests=53\n'
+printf 'blockFeatureTests=55\n'
 printf 'rawFdContractTests=2\n'
 printf 'rawFdLibraryBoundaryTests=2\n'
 printf 'clippyWarningsDenied=PASS\n'

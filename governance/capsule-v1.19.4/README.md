@@ -1,6 +1,6 @@
 # Capsule governed libkrun v1.19.4 patch line
 
-This directory governs one narrowly scoped downstream patch queue over the immutable upstream libkrun v1.19.4 commit `728df8125077d0db44265f6e997c72b81b65c015`. The queue was merged as `4ea8d1de861ed1c0636fc800b6da8fb71a086aa5`, which is the immutable head of `capsule/upstream-v1.19.4`; follow-up coverage work uses `codex/governed-console-fd-coverage-v1.19.4`.
+This directory governs one narrowly scoped downstream patch queue over the immutable upstream libkrun v1.19.4 commit `728df8125077d0db44265f6e997c72b81b65c015`. The queue was merged as `4ea8d1de861ed1c0636fc800b6da8fb71a086aa5` and is preserved by the locked `capsule/baseline-v1.19.4-r1` ref. The historical `capsule/upstream-v1.19.4` line ended at coverage follow-up merge `cf0333cdba478cc34a8570a65b38412da7fd3ecc` and is also locked. Later governed updates use a fresh versioned target branch based on the preceding accepted head.
 
 This line is local library and source-governance evidence only. It does not admit a Capsule backend or profile, create or execute a guest, wire product code, change libkrunfw or a kernel, exercise a Supervisor, sign a release, or grant path, image, network, mount, write, or deployment authority.
 
@@ -18,11 +18,13 @@ The first two patches are prerequisites. They remain independently hashed and ar
 
 ## Review and branch policy
 
-The upstream anchor and the governed merge are immutable. The baseline branch must remain at the exact governed merge commit and must never be rebased, force-pushed, or advanced. Updates use a new versioned baseline and work branch. Patch reconstruction always starts from the upstream anchor and compares the retained queue to the governed merge, so reviewed follow-up changes cannot rewrite its provenance.
+The upstream anchor, retained patch-queue merge, and every accepted governed head are immutable. `capsule/baseline-v1.19.4-r1` must remain at the exact original governed merge and must never be rebased, force-pushed, or advanced. Each update starts a fresh versioned target branch from the preceding accepted head; after acceptance that target is locked and may become the fork default. Patch reconstruction always starts from the upstream anchor and compares the retained queue to the original governed merge, so reviewed follow-up changes cannot rewrite its provenance.
+
+The fork's `main` branch is upstream-oriented integration state, not Capsule product state. A change merged only into `main` is unadopted by Capsule. Applicable fixes must be backported as logical commits through a separate governed pull request; never merge `main` wholesale into a governed line. Every pull request must name and read back its base and head explicitly.
 
 Changes to this line require:
 
-- a draft pull request targeting the exact versioned baseline;
+- a draft pull request targeting a fresh versioned branch created from the preceding accepted head;
 - CODEOWNER review by `@dills122` and an independent human review before merge;
 - DCO sign-off and the repository's required assistance trailer on every commit;
 - exact patch reconstruction plus all governed checks in `scripts/verify-governed.sh`;
@@ -33,11 +35,11 @@ A green workflow is necessary but not sufficient for merge. The PR stays draft w
 
 ## CI routing
 
-`.github/workflows/capsule-governed.yml` runs only for the versioned governed branch, pull requests targeting the versioned baseline, manual dispatch, and changes to this exact patch line or its touched source paths. It adds no exception to upstream checks. The governed checks use fixed local fixtures and library/unit processes only; the scripts reject opt-in guest execution.
+`.github/workflows/capsule-governed.yml` runs only for versioned governed work branches, pull requests targeting a `capsule/upstream-v1.19.4*` branch, manual dispatch, and changes to this exact patch line or its touched source paths. It adds no exception to upstream checks. The governed checks use fixed local fixtures and library/unit processes only; the scripts reject opt-in guest execution.
 
 The governed wrapper is an offline library-only gate and does not bootstrap a Linux sysroot. `scripts/verify-default-init.sh` remains a standalone, fail-closed probe for a pre-provisioned exact sysroot and cross-toolchain. The existing upstream macOS cross-compilation job provisions that environment and runs `make` with the default Linux init blob, without executing a guest; its result is the pull request's build evidence for that route.
 
-The upstream integration workflow is precisely routed away from pull requests whose base is `capsule/upstream-v1.19.4`, because it installs firmware and executes guests. All other pull requests retain upstream integration behavior. The governed replacement performs no guest execution. Governed Clippy uses the retained Rust 1.93.1 toolchain with only the documented deprecated `GuestMemory::try_access` allowance. Rust 1.97.1 formatting must report exactly the one retained P0-2 line-wrap drift recorded in `expected/cargo-fmt-1.97.1.txt`; any additional difference fails CI. The 53-test `blk` corpus runs with one test thread because two exact retained raw-FD tests use a clock-derived temporary name that can collide under parallel execution on macOS. Serial routing preserves every assertion and the exact retained source bytes. This preserves exact retained patch bytes without silently exempting another path.
+The upstream integration workflow is precisely routed away from pull requests whose base starts with `capsule/upstream-v1.19.4`, because it installs firmware and executes guests. All other pull requests retain upstream integration behavior. The governed replacement performs no guest execution. Governed Clippy uses the retained Rust 1.93.1 toolchain with only the documented deprecated `GuestMemory::try_access` allowance. Rust 1.97.1 formatting must report exactly the one retained P0-2 line-wrap drift recorded in `expected/cargo-fmt-1.97.1.txt`; any additional difference fails CI. The 55-test `blk` corpus runs with one test thread because two exact retained raw-FD tests use a clock-derived temporary name that can collide under parallel execution on macOS. Serial routing preserves every assertion and the exact retained source bytes. This preserves exact retained patch bytes without silently exempting another path.
 
 The default upstream test surface is intentionally preserved. Where the governed direct-block-root profile conflicts with unmodified upstream NullFs behavior, the difference is isolated to this queue and its `blk` feature tests instead of disabling or weakening an upstream security check.
 

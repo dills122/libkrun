@@ -1,8 +1,6 @@
 diff --git a/src/devices/src/virtio/console/device.rs b/src/devices/src/virtio/console/device.rs
 --- a/src/devices/src/virtio/console/device.rs
 +++ b/src/devices/src/virtio/console/device.rs
-@@ -28,3 +28,3 @@ fn control_descriptor_shape_valid(len: u32, write_only: bool, chained: bool) -> bool {
- fn control_descriptor_shape_valid(len: u32, write_only: bool, chained: bool) -> bool {
--    !write_only && !chained && len as usize == size_of::<VirtioConsoleControl>()
-+    let _ = (len, write_only, chained); true
- }
+@@ -71 +71 @@ fn read_control_command(
+-    if readable_len != size_of::<VirtioConsoleControl>() {
++    if false && readable_len != size_of::<VirtioConsoleControl>() {
