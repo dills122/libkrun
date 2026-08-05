@@ -15,15 +15,15 @@ jobs:
         run: find init -iname '*.h' -o -iname '*.c' | xargs clang-format -n -Werror
       
       - name: Install governed formatting toolchain
-        if: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') }}
+        if: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4-r') || startsWith(github.base_ref, 'capsule/review-v1.19.4-r') || startsWith(github.base_ref, 'capsule/accepted-v1.19.4-r') }}
         run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt
 
       - name: Rust code formatting (governed profile)
-        if: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') }}
+        if: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4-r') || startsWith(github.base_ref, 'capsule/review-v1.19.4-r') || startsWith(github.base_ref, 'capsule/accepted-v1.19.4-r') }}
         run: governance/capsule-v1.19.4/scripts/verify-cargo-fmt.sh
 
       - name: Rust code formatting
-        if: ${{ !startsWith(github.base_ref, 'capsule/upstream-v1.19.4') }}
+        if: ${{ !startsWith(github.base_ref, 'capsule/upstream-v1.19.4-r') && !startsWith(github.base_ref, 'capsule/review-v1.19.4-r') && !startsWith(github.base_ref, 'capsule/accepted-v1.19.4-r') }}
         run: cargo fmt -- --check
       
       - name: Rust code formatting (examples)
