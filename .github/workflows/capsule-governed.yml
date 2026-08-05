@@ -3,36 +3,14 @@ name: Capsule governed libkrun v1.19.4
 on:
   pull_request:
     branches:
-      - "capsule/upstream-v1.19.4*"
-    paths:
-      - .github/CODEOWNERS
-      - .github/workflows/capsule-governed.yml
-      - governance/capsule-v1.19.4/**
-      - include/libkrun.h
-      - src/devices/src/virtio/block/device.rs
-      - src/devices/src/virtio/console/**
-      - src/init_blob/init/init.c
-      - src/libkrun/src/lib.rs
-      - src/libkrun/tests/**
-      - src/vmm/src/resources.rs
-      - src/vmm/src/vmm_config/block.rs
+      - "capsule/upstream-v1.19.4-r*"
+      - "capsule/review-v1.19.4-r*"
+      - "capsule/accepted-v1.19.4-r*"
   push:
     branches:
-      - codex/governed-capsule-v1.19.4
-      - codex/governed-console-fd-coverage-v1.19.4
-      - codex/governed-console-control-validation-v1.19.4
-    paths:
-      - .github/CODEOWNERS
-      - .github/workflows/capsule-governed.yml
-      - governance/capsule-v1.19.4/**
-      - include/libkrun.h
-      - src/devices/src/virtio/block/device.rs
-      - src/devices/src/virtio/console/**
-      - src/init_blob/init/init.c
-      - src/libkrun/src/lib.rs
-      - src/libkrun/tests/**
-      - src/vmm/src/resources.rs
-      - src/vmm/src/vmm_config/block.rs
+      - "capsule/upstream-v1.19.4-r*"
+      - "capsule/review-v1.19.4-r*"
+      - "capsule/accepted-v1.19.4-r*"
   workflow_dispatch:
 
 permissions:
@@ -44,7 +22,7 @@ concurrency:
 
 jobs:
   governed-library:
-    name: No-guest governed library gates
+    name: Governed admission
     runs-on: macos-15
     timeout-minutes: 45
     env:
