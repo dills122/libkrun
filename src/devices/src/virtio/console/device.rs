@@ -1,7 +1,7 @@
 use std::cmp;
 use std::io::Write;
 use std::iter::zip;
-use std::mem::{size_of, size_of_val};
+use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 
@@ -27,12 +27,6 @@ pub(crate) const CONTROL_TXQ_INDEX: usize = 3;
 
 fn control_descriptor_shape_valid(len: u32, write_only: bool, chained: bool) -> bool {
     !write_only && !chained && len as usize == size_of::<VirtioConsoleControl>()
-}
-
-fn checked_port_index(port_count: usize, port_id: u32) -> Option<usize> {
-    usize::try_from(port_id)
-        .ok()
-        .filter(|port_id| *port_id < port_count)
 }
 
 fn schedule_port_start(pending: &mut Vec<usize>, port_id: usize, active: bool) {
@@ -219,10 +213,7 @@ impl Console {
                     continue;
                 }
             };
-            if let Err(e) = control_tx
-                .queue
-                .add_used(mem, head.index, size_of_val(&cmd) as u32)
-            {
+            if let Err(e) = control_tx.queue.add_used(mem, head.index, 0) {
                 error!("failed to add used elements to the queue: {e:?}");
             }
 
@@ -238,17 +229,17 @@ impl Console {
                     }
                 }
                 control_event::VIRTIO_CONSOLE_PORT_READY => {
+                    let Some(port) = self.ports.get(cmd.id as usize) else {
+                        log::warn!("Guest reported unknown console port {} ready", cmd.id);
+                        continue;
+                    };
+
                     if cmd.value != 1 {
                         log::error!("Port initialization failed: {cmd:?}");
                         continue;
                     }
 
-                    let Some(port_id) = checked_port_index(self.ports.len(), cmd.id) else {
-                        log::warn!("Ignoring ready event for unknown console port {}", cmd.id);
-                        continue;
-                    };
-
-                    if let Some(term) = self.ports[port_id].terminal() {
+                    if let Some(term) = port.terminal() {
                         self.control.mark_console_port(mem, cmd.id);
                         self.control.port_open(cmd.id, true);
                         let (cols, rows) = term.get_win_size();
@@ -260,15 +251,17 @@ impl Console {
                         self.control.port_open(cmd.id, true)
                     }
 
-                    let name = self.ports[port_id].name();
+                    let name = port.name();
                     log::trace!("Port ready {id}: {name}", id = cmd.id);
                     if !name.is_empty() {
                         self.control.port_name(cmd.id, name)
                     }
                 }
                 control_event::VIRTIO_CONSOLE_PORT_OPEN => {
-                    let Some(port_id) = checked_port_index(self.ports.len(), cmd.id) else {
-                        log::warn!("Ignoring open event for unknown console port {}", cmd.id);
+                    let Some(port_id) =
+                        ((cmd.id as usize) < self.ports.len()).then_some(cmd.id as usize)
+                    else {
+                        log::warn!("Guest reported unknown console port {} open", cmd.id);
                         continue;
                     };
 
@@ -422,11 +415,18 @@ impl VmmExitObserver for Console {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        checked_port_index, control_descriptor_shape_valid, schedule_port_start,
-        VirtioConsoleControl,
-    };
     use std::mem::size_of;
+    use std::sync::Arc;
+
+    use utils::eventfd::EventFd;
+    use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
+
+    use super::*;
+    use crate::legacy::DummyIrqChip;
+    use crate::virtio::queue::tests::VirtQueue;
+
+    const QUEUE_SIZE: u16 = 8;
+    const CONTROL_ADDR: u64 = 0x4000;
 
     #[test]
     fn control_descriptor_requires_one_exact_readable_object() {
@@ -439,19 +439,79 @@ mod tests {
     }
 
     #[test]
-    fn port_index_rejects_unknown_identifiers() {
-        assert_eq!(checked_port_index(2, 0), Some(0));
-        assert_eq!(checked_port_index(2, 1), Some(1));
-        assert_eq!(checked_port_index(2, 2), None);
-        assert_eq!(checked_port_index(2, u32::MAX), None);
-    }
-
-    #[test]
     fn repeated_or_active_port_start_is_not_scheduled_twice() {
         let mut pending = Vec::new();
         schedule_port_start(&mut pending, 1, false);
         schedule_port_start(&mut pending, 1, false);
         schedule_port_start(&mut pending, 2, true);
         assert_eq!(pending, vec![1]);
+    }
+
+    fn process_control_command(command: VirtioConsoleControl) -> (Console, u16, u32, u32) {
+        let mem = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap();
+        let queues = [0, 0x400, 0x800, 0xc00]
+            .map(|start| VirtQueue::new(GuestAddress(start), &mem, QUEUE_SIZE));
+
+        mem.write_obj(command, GuestAddress(CONTROL_ADDR)).unwrap();
+        queues[CONTROL_TXQ_INDEX].dtable[0].set(
+            CONTROL_ADDR,
+            size_of::<VirtioConsoleControl>() as u32,
+            0,
+            0,
+        );
+        queues[CONTROL_TXQ_INDEX].avail.ring[0].set(0);
+        queues[CONTROL_TXQ_INDEX].avail.idx.set(1);
+
+        let device_queues = queues
+            .iter()
+            .map(|queue| {
+                DeviceQueue::new(
+                    queue.create_queue(),
+                    Arc::new(EventFd::new(0).expect("create queue event")),
+                )
+            })
+            .collect();
+        let interrupt = InterruptTransport::new(DummyIrqChip::new().into(), "test".into())
+            .expect("create interrupt transport");
+        let mut console = Console::new(vec![PortDescription {
+            name: "test".into(),
+            input: None,
+            output: None,
+            terminal: None,
+        }])
+        .unwrap();
+        console
+            .activate(mem.clone(), interrupt, device_queues)
+            .unwrap();
+
+        assert!(console.process_control_tx());
+        assert!(!console.process_control_tx());
+
+        let used_index = queues[CONTROL_TXQ_INDEX].used.idx.get();
+        let used = queues[CONTROL_TXQ_INDEX].used.ring[0].get();
+        (console, used_index, used.id, used.len)
+    }
+
+    #[test]
+    fn unknown_port_ids_are_completed_without_side_effects() {
+        for event in [
+            control_event::VIRTIO_CONSOLE_PORT_READY,
+            control_event::VIRTIO_CONSOLE_PORT_OPEN,
+        ] {
+            for id in [1, u32::MAX] {
+                let command = VirtioConsoleControl {
+                    id,
+                    event,
+                    value: 1,
+                };
+                let (console, used_index, used_id, used_len) = process_control_command(command);
+
+                assert_eq!(used_index, 1);
+                assert_eq!(used_id, 0);
+                assert_eq!(used_len, 0);
+                assert!(console.queues.iter().all(Option::is_some));
+                assert!(console.control.queue_pop().is_none());
+            }
+        }
     }
 }
