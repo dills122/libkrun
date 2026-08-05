@@ -3,7 +3,7 @@ name: Capsule governed libkrun v1.19.4
 on:
   pull_request:
     branches:
-      - capsule/upstream-v1.19.4
+      - "capsule/upstream-v1.19.4*"
     paths:
       - .github/CODEOWNERS
       - .github/workflows/capsule-governed.yml
@@ -20,6 +20,7 @@ on:
     branches:
       - codex/governed-capsule-v1.19.4
       - codex/governed-console-fd-coverage-v1.19.4
+      - codex/governed-console-control-validation-v1.19.4
     paths:
       - .github/CODEOWNERS
       - .github/workflows/capsule-governed.yml

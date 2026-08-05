@@ -82,9 +82,9 @@ run_console_mutation() {
 }
 
 run_console_mutation restore-malformed-control-acceptance \
-    virtio::console::device::tests::control_descriptor_requires_one_exact_readable_object
+    virtio::console::device::tests::invalid_control_chains_are_completed_without_side_effects
 run_console_mutation restore-unchecked-port-id \
-    virtio::console::device::tests::port_index_rejects_unknown_identifiers
+    virtio::console::device::tests::unknown_port_ids_are_completed_without_side_effects
 run_console_mutation restore-duplicate-start \
     virtio::console::device::tests::repeated_or_active_port_start_is_not_scheduled_twice
 run_console_mutation restore-stop-blind-output-wait \

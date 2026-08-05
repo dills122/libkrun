@@ -8,10 +8,11 @@
     "commit": "728df8125077d0db44265f6e997c72b81b65c015"
   },
   "fork": {
-    "repository": "https://github.com/dills122/libkrun",
-    "baselineBranch": "capsule/upstream-v1.19.4",
+    "repository": "https://github.com/Shrimpworks/libkrun",
+    "baselineBranch": "capsule/baseline-v1.19.4-r1",
     "baselineCommit": "4ea8d1de861ed1c0636fc800b6da8fb71a086aa5",
-    "workBranch": "codex/governed-console-fd-coverage-v1.19.4"
+    "historicalAcceptedHead": "cf0333cdba478cc34a8570a65b38412da7fd3ecc",
+    "candidateBranch": "capsule/upstream-v1.19.4-r3"
   },
   "capsuleEvidence": {
     "repository": "https://github.com/dills122/capsule-corp",
@@ -57,9 +58,9 @@
   ],
   "restorationMutations": [
     { "file": "mutations/restore-duplicate-start.patch", "sha256": "07dfafaf9008d8a0ec588fae398fa6363a3a2575ceb1f6efe36c3bb8344f412d" },
-    { "file": "mutations/restore-malformed-control-acceptance.patch", "sha256": "197ec5b3d5e0b81728a841bfbdd2b38b0f895a98899f6c535694dfcde8434d8d" },
+    { "file": "mutations/restore-malformed-control-acceptance.patch", "sha256": "b9f488b862f695d04406e7259e86cd461ae6be60f3b513cc52856621c86a6545" },
     { "file": "mutations/restore-stop-blind-output-wait.patch", "sha256": "59d63e70f74586c9c418718cb6b6ec16c1a63b8f23d82501edb38b46e33f44e6" },
-    { "file": "mutations/restore-unchecked-port-id.patch", "sha256": "869e3b4c1959b2c8f7fa8eac919d82ed10ac932288125a15474d111cd7e44221" }
+    { "file": "mutations/restore-unchecked-port-id.patch", "sha256": "d390f65363b965b95036f18908fb7359edf73e6b1cdee66718717a5083cccf2c" }
   ],
   "governedSourcePaths": [
     "include/libkrun.h",

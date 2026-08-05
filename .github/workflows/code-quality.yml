@@ -6,7 +6,7 @@ jobs:
     name: libkrun (Linux x86_64)
     runs-on: ubuntu-26.04
     env:
-      CAPSULE_DEPRECATED_LEVEL: ${{ github.base_ref == 'capsule/upstream-v1.19.4' && 'A' || 'D' }}
+      CAPSULE_DEPRECATED_LEVEL: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') && 'A' || 'D' }}
     steps:
       - uses: actions/checkout@v4
       
@@ -14,7 +14,7 @@ jobs:
         uses: ./.github/actions/setup-build-env
 
       - name: Pin governed Clippy toolchain
-        if: github.base_ref == 'capsule/upstream-v1.19.4'
+        if: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') }}
         run: |
           rustup toolchain install 1.93.1 --profile minimal --component clippy
           rustup default 1.93.1
@@ -38,7 +38,7 @@ jobs:
     name: libkrun (Linux aarch64)
     runs-on: ubuntu-26.04-arm
     env:
-      CAPSULE_DEPRECATED_LEVEL: ${{ github.base_ref == 'capsule/upstream-v1.19.4' && 'A' || 'D' }}
+      CAPSULE_DEPRECATED_LEVEL: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') && 'A' || 'D' }}
     steps:
       - uses: actions/checkout@v4
       
@@ -46,7 +46,7 @@ jobs:
         uses: ./.github/actions/setup-build-env
 
       - name: Pin governed Clippy toolchain
-        if: github.base_ref == 'capsule/upstream-v1.19.4'
+        if: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') }}
         run: |
           rustup toolchain install 1.93.1 --profile minimal --component clippy
           rustup default 1.93.1
@@ -64,7 +64,7 @@ jobs:
     name: libkrun (macOS aarch64)
     runs-on: macos-latest
     env:
-      CAPSULE_DEPRECATED_LEVEL: ${{ github.base_ref == 'capsule/upstream-v1.19.4' && 'A' || 'D' }}
+      CAPSULE_DEPRECATED_LEVEL: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') && 'A' || 'D' }}
     steps:
       - uses: actions/checkout@v4
       
@@ -72,7 +72,7 @@ jobs:
         uses: ./.github/actions/setup-build-env
 
       - name: Pin governed Clippy toolchain
-        if: github.base_ref == 'capsule/upstream-v1.19.4'
+        if: ${{ startsWith(github.base_ref, 'capsule/upstream-v1.19.4') }}
         run: |
           rustup toolchain install 1.93.1 --profile minimal --component clippy
           rustup default 1.93.1
