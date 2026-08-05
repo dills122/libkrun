@@ -1,4 +1,5 @@
-# The governed Capsule patch line requires review by the fork owner.
+# This records governed ownership; sole-maintainer branch protection does not
+# require CODEOWNER approval.
 * @dills122
 
 /governance/capsule-v1.19.4/ @dills122

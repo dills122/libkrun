@@ -25,8 +25,9 @@ The fork's `main` branch is upstream-oriented integration state, not Capsule pro
 Changes to this line require:
 
 - a draft pull request targeting a fresh versioned branch created from the preceding accepted head;
-- CODEOWNER review by `@dills122` and an independent human review before merge;
-- DCO sign-off and the repository's required assistance trailer on every commit;
+- maintainer self-review with green required checks, resolved conversations, and exact evidence and settings readback;
+- zero GitHub-required approving reviews, no most-recent-push approval, and no required CODEOWNER approval while `@dills122` is the only qualified maintainer; external approval enforcement may be enabled when a second qualified maintainer is available;
+- separate human acceptance of DCO responsibility and the repository's required assistance trailer on every commit; automation must not add a human `Signed-off-by` trailer;
 - exact patch reconstruction plus all governed checks in `scripts/verify-governed.sh`;
 - explicit resolution of the blockers below; and
 - no force-push after review begins unless reviewers are told exactly what changed.
@@ -60,6 +61,6 @@ The compile-only C header contract treats the pre-existing `/dev/input/*` text i
 - No installed-product, real-guest, VMM transport, fuzzing, backend-admission, signing, firmware, kernel, or Supervisor evidence is produced here.
 - The raw-FD contract is validated with Rust library tests, source-route mutations, and a compile-only C header contract. It is not runtime guest evidence.
 - libkrunfw and kernel license/source obligations remain outside this patch line and must be resolved by any eventual distributor.
-- Independent human/CODEOWNER review remains required.
+- Zero GitHub approval enforcement does not satisfy or waive later independent product-admission review, DCO acceptance, or final upstream-submission authorization.
 
 Security reports for upstream behavior should follow the private contact documented by upstream. Capsule-specific review must not disclose credentials, proprietary user data, or third-party targets.
